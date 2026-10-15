@@ -23,3 +23,6 @@ Thumbs.db
 
 # 개인 Claude Code 설정(공유 설정 .claude/settings.json은 올린다)
 .claude/settings.local.json
+
+# 가공 데이터(스크립트로 다시 만듦). 대조 결과 build_report.json만 올린다
+data/processed/*.csv
