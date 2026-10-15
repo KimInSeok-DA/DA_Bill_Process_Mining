@@ -310,7 +310,7 @@ def main() -> None:
 
     # H2: 묶음 처리
     cmt = log[log["activity"] == "소관위 처리"].copy()
-    cmt["batch"] = cmt.groupby(["committee_n", "date"])["case_id"].transform("size")
+    cmt["batch"] = cmt.groupby(["committee_n", "date"], dropna=False)["case_id"].transform("size")
     cmt["결과"] = cmt["stage_result"].map(lambda r: "대안반영폐기" if r in ALT else ("가결" if r in ("원안가결", "수정가결") else "기타"))
     bins = [0, 1, 4, 9, 19, 49, 10**6]
     labels = ["1", "2～4", "5～9", "10～19", "20～49", "50+"]
@@ -322,7 +322,7 @@ def main() -> None:
     res["H2"] = {"cmt_proc_events": len(cmt), "share_in_batch_ge2": round(share_batch, 3),
                  "median_batch_size_per_event": float(cmt["batch"].median()),
                  "share_ge2_by_result": cmt.groupby("결과")["batch"].apply(lambda s: round(float((s >= 2).mean()), 3)).to_dict(),
-                 "meeting_days": int(cmt.groupby(["committee_n", "date"]).ngroups),
+                 "meeting_days": int(cmt.groupby(["committee_n", "date"], dropna=False).ngroups),
                  "support": share_batch > 0.5}
 
     # H5: 상임위원회별 소위 회부 → 소위 상정

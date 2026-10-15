@@ -3,7 +3,7 @@
 ## 현재 상태 (2026-10-15)
 
 - 설정: `AGENTS.md`·`CLAUDE.md`·`.gitignore`·`.gitattributes`·`.env.example`·`.claude/settings.json`(attribution 끔)·`.githooks/`(`core.hooksPath` 설정됨)·`.python-version`(3.14), `git init`
-- GitHub(10-15): `main`에 README·설정(PR #1), 수집·날짜 필드 정의(PR #2), 소위 수집(PR #3), 이벤트 로그(PR #4) 병합. 현재 브랜치 `analysis`(커밋 전). 계속 바뀌는 문서·`requirements.txt`는 단계가 끝날 때 그 브랜치로 올림. 커밋·푸시는 사용자 요청 시에만, PR 제목·본문은 알려 주면 사용자가 붙여 넣음
+- GitHub(10-15): `main`에 README·설정(PR #1), 수집·날짜 필드 정의(PR #2), 소위 수집(PR #3), 이벤트 로그(PR #4), 분석(PR #5) 병합. 현재 브랜치 `cross-check`(커밋 전). 계속 바뀌는 문서·`requirements.txt`는 단계가 끝날 때 그 브랜치로 올림. 커밋·푸시는 사용자 요청 시에만, PR 제목·본문은 알려 주면 사용자가 붙여 넣음
 - `.env`에 `ASSEMBLY_API_KEY` 있음. 10-15 동작 확인: 「국회의원 발의법률안」(`nzmimeepazxkubdpn`) AGE=22 19,917건, 단계 날짜 필드 있음(`_private/02_로드맵.md` 1절)
 - 환경(10-15): `.venv` Python 3.14.5, `requirements.txt`는 `pip freeze` 고정(pm4py 2.7.23.10·pandas 3.0.6·duckdb 1.5.6). 3.12 대신 3.14: PC에 3.14만 설치돼 있고 pm4py·의존 패키지가 3.14 Windows 휠을 제공(설치·import 확인)
 - 수집 완료(10-15): `src/collect.py` → `data/raw/nzmimeepazxkubdpn/AGE22_20261015/`(20페이지 + `manifest.json`). 행 19,917 = 고유 `BILL_ID` 19,917 = `list_total_count` 19,917. 제안일 2024-05-30～2026-10-14
@@ -23,13 +23,15 @@
   - 프로세스 지도는 pm4py 수치 + matplotlib(Graphviz 실행 파일 없음)
   - 가설별 그림 `src/figures.py`(그림 4～8: 생존곡선·버블 타임라인·상자그림·덤벨·히트맵, seaborn). 보고서에는 3장을 고름
 
+- 교차 검증(10-15, [1015_05](docs/의사결정/1015_05_교차검증.md)): `src/cross_check.py` → `outputs/cross_check.csv`. DuckDB SQL로 5개 지표 201항목 재계산, 모두 일치(첫 실행에서 분석 코드 버그 1건 발견·수정: 회의일 242 → 244)
+
 ## 다음 작업
 
-1. **`analysis` 커밋 시점**(사용자 요청 대기): `src/analysis.py`, `src/figures.py`, `docs/의사결정/1015_04_분석_가설.md`, `outputs/`, `requirements.txt`(seaborn 추가), 작업 문서
-2. cross-check 브랜치: 핵심 지표 3개 이상을 pm4py·pandas와 다른 방법(DuckDB SQL)으로 다시 계산해 대조. 후보: 직접 이어짐 빈도(pm4py DFG ↔ SQL), 구간 대기 중앙값(pandas ↔ SQL), 계류 단계 분포, 묶음 비율, KM 중앙값(직접 구현 ↔ 다른 계산)
-3. report: `outputs/report.md`(1쪽), README(첫 표·출처·실행 방법·한계), 이벤트 로그 CSV 공개 방식 결정
+1. **`cross-check` 커밋 시점**(사용자 요청 대기): `src/cross_check.py`, `docs/의사결정/1015_05_교차검증.md`, `src/analysis.py`·`src/figures.py`(dropna 수정), `outputs/`(재실행 결과), `docs/의사결정/1015_04_분석_가설.md`(244 반영), 작업 문서
+2. 범위 확장 결정(정부제출안·위원회안·대안): 후보 API 「법률안 심사 및 처리(의안검색)」, 「법률안 심사 및 처리(위원회안, 대안)」. 요청 코드·필드는 사용자가 서비스 페이지에서 확인 → 수집·필드 대조 → 이벤트 로그·분석·그림·교차 검증 재실행
+3. report: `outputs/report.md`(1쪽, 그림 3장 추천 1·4·5), README(첫 표·출처·실행 순서·한계), 이벤트 로그 CSV 공개 방식 결정, `outputs/.gitkeep` 제거
 
 ## 열린 결정
 
-- 의원발의만 볼지, 정부제출안·위원회안까지 넣을지
+- 의원발의만 볼지, 정부제출안·위원회안까지 넣을지(사용자: 넣으면 품질에 도움될 것 같다는 의견, 10-15. 방식 결정 필요)
 - 이벤트 로그 CSV: 최종본을 올릴지, README에 만드는 방법(수집 → 생성 스크립트)만 안내할지 report 단계에서 결정
