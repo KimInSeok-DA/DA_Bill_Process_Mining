@@ -27,6 +27,16 @@ sns.set_theme(style="whitegrid", font="Malgun Gothic", rc={"axes.unicode_minus":
 BLUE, ORANGE, RED, GRAY = "#3b6ea5", "#e08e45", "#c0392b", "#8c8c8c"
 
 
+# 그림 10 구간 이름을 처음 보는 사람도 읽을 수 있게
+PLAIN_STEPS = {
+    "원안 소관위 처리 → 대안 소관위 처리": "법률안 위원회 처리 → 대안 의결",
+    "대안 소관위 처리 → 대안 법사위 회부": "대안 의결 → 법사위로 넘어감",
+    "대안 법사위 회부 → 대안 법사위 처리": "법사위로 넘어감 → 법사위 검토 끝",
+    "대안 법사위 처리 → 대안 위원회 제출": "법사위 검토 끝 → 위원회 최종 제출",
+    "대안 위원회 제출 → 대안 본회의": "위원회 최종 제출 → 본회의 통과",
+}
+
+
 def short(name: str) -> str:
     return name.replace("위원회", "위").replace("특별위", "특위")
 
@@ -52,13 +62,13 @@ def fig4_survival(log):
         obs = (first[b] - first[a]).dt.days
         obs = obs[obs >= 0].median()
         ax.step(s.index, s.values, where="post", color=c, lw=lw,
-                label=f"{a} → {b}  (n={len(dur):,}, 도달 {ev.mean():.0%}) · KM 중앙 {med:.0f}일 / 관찰 중앙 {obs:.0f}일")
+                label=f"{a} → {b}  ({len(dur):,}건 중 {ev.mean():.0%} 넘어감) · 포함 중앙 {med:.0f}일 / 끝난 것 기준 {obs:.0f}일")
         if med is not None and med > 30:
             ax.plot([med, med], [0, 0.5], color=c, ls=":", lw=1.2)
             ax.annotate(f"{med:.0f}일", (med, 0.02), color=c, fontsize=10, ha="center", fontweight="bold")
     ax.axhline(0.5, color="black", lw=0.8, ls="--")
-    ax.text(805, 0.51, "절반이 넘어간 시점 = KM 중앙값", fontsize=9, ha="right", va="bottom")
-    ax.annotate("관찰 중앙값 21일은\n상정까지 간 44%만 본 값",
+    ax.text(805, 0.51, "절반이 넘어간 날 = 기다리는 법률안까지 포함한 중앙값", fontsize=9, ha="right", va="bottom")
+    ax.annotate("끝난 것 기준 21일은\n안건에 오른 44%만 본 값",
                 xy=(21, s21), xytext=(140, 0.9), fontsize=9, color=RED,
                 arrowprops=dict(arrowstyle="->", color=RED))
     ax.set_xlim(0, 810)
@@ -66,7 +76,7 @@ def fig4_survival(log):
     ax.set_xlabel("앞 단계 뒤 경과일")
     ax.set_ylabel("아직 다음 단계로 못 간 비율")
     ax.set_title("H1·H4  소위 상정을 기다리는 시간이 가장 길다 — 법사위는 짧다\n"
-                 "구간별 생존곡선(Kaplan-Meier, 진행 중 의안은 조회일에서 관찰 중단)", fontsize=13)
+                 "구간별 생존곡선: 아직 다음 단계로 못 간 비율(처리 중인 법률안 포함, Kaplan-Meier)", fontsize=13)
     ax.legend(loc="upper right", fontsize=8.5, frameon=True)
     fig.text(0.01, 0.005, A.SOURCE, fontsize=8, color="#666")
     fig.tight_layout(rect=(0, 0.03, 1, 1))
@@ -88,16 +98,16 @@ def fig5_meetings(log):
     ax.set_yticklabels([f"{short(c)} ({int(m.loc[m['committee_n'] == c, 'n'].sum()):,})" for c in order], fontsize=9)
     for n in (5, 20, 50, 100):
         ax.scatter([], [], s=n * 6, color="white", edgecolor="#555", label=f"{n}건")
-    ax.legend(title="그날 함께 처리한 의안", loc="lower left", fontsize=8, title_fontsize=8, labelspacing=1.3,
+    ax.legend(title="그날 함께 처리한 법률안", loc="lower left", fontsize=8, title_fontsize=8, labelspacing=1.3,
               borderpad=1, frameon=True)
     cb = fig.colorbar(sc, ax=ax, pad=0.01, shrink=0.6)
     cb.set_label("그중 대안반영폐기 비율")
     share = (cmt.groupby(["committee_n", "date"], dropna=False)["case_id"].transform("size") >= 2).mean()
-    ax.set_title(f"H2  위원회는 의안을 하나씩이 아니라 묶어서 처리한다\n"
+    ax.set_title(f"H2  위원회는 법률안을 하나씩이 아니라 묶어서 처리한다\n"
                  f"점 하나 = 위원회 회의 하루({len(m)}번) · 소관위 처리 {len(cmt):,}건 중 {share:.1%}가 2건 이상 묶음",
                  fontsize=13)
     ax.set_xlabel("소관위 처리일")
-    fig.text(0.01, 0.005, A.SOURCE + " · 위원회 개편 전후 이름 묶음, 괄호는 처리 의안 수", fontsize=8, color="#666")
+    fig.text(0.01, 0.005, A.SOURCE + " · 위원회 개편 전후 이름 묶음, 괄호는 처리한 법률안 수", fontsize=8, color="#666")
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     fig.savefig(FIG / "fig5_h2_meetings.png", dpi=150)
     plt.close(fig)
@@ -117,7 +127,7 @@ def fig6_backlog(log):
         a1.text(v + 150, i, f"{v:,}건 ({v / cnt.sum():.1%})", va="center", fontsize=9)
     a1.set_xlim(0, cnt.max() * 1.45)
     a1.invert_yaxis()
-    a1.set_xlabel("진행 중 의안 수")
+    a1.set_xlabel("처리 중인 법률안 수")
     a1.set_title("지금 기다리는 단계")
     sns.boxplot(data=last, y="단계", x="elapsed", order=order, ax=a2, orient="h", showfliers=False,
                 palette=dict(zip(order, colors)), width=0.55, hue="단계", hue_order=order, legend=False)
@@ -126,7 +136,7 @@ def fig6_backlog(log):
     a2.set_xlabel("마지막 단계 뒤 경과일(조회일 기준, 이상값 제외 상자그림)")
     a2.set_ylabel("")
     a2.set_title("기다린 기간")
-    fig.suptitle(f"H3  진행 중 의안 {cnt.sum():,}건의 3분의 2가 소위 상정을 기다린다", fontsize=13)
+    fig.suptitle(f"H3  처리 중인 법률안 {cnt.sum():,}건의 3분의 2가 소위 안건 상정을 기다린다", fontsize=13)
     fig.text(0.01, 0.005, A.SOURCE, fontsize=8, color="#666")
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
     fig.savefig(FIG / "fig6_h3_backlog.png", dpi=150)
@@ -145,21 +155,21 @@ def fig7_committee():
         a1.plot([o, k], [i, i], color="#bbb", lw=2, zorder=1)
         if und:
             a1.annotate("", xy=(cap + 25, i), xytext=(cap - 5, i), arrowprops=dict(arrowstyle="->", color=RED))
-    a1.scatter(cm["관찰중앙값"], y, color=BLUE, s=55, zorder=2, label="관찰 중앙값(상정까지 간 의안만)")
-    a1.scatter(cm["km_plot"], y, color=RED, marker="D", s=50, zorder=2, label="KM 중앙값(기다리는 의안 포함)")
-    a1.axvspan(cap - 10, cap + 40, color="#fbe3e0", zorder=0, label="→ KM 중앙값 없음(절반 넘게 아직 상정 전)")
+    a1.scatter(cm["관찰중앙값"], y, color=BLUE, s=55, zorder=2, label="끝난 것 기준(안건에 오른 법률안만)")
+    a1.scatter(cm["km_plot"], y, color=RED, marker="D", s=50, zorder=2, label="기다리는 법률안까지 포함한 중앙값")
+    a1.axvspan(cap - 10, cap + 40, color="#fbe3e0", zorder=0, label="→ 계산 불가(절반 넘게 아직 안건 상정 전)")
     a1.set_yticks(y)
     a1.set_yticklabels([short(c) for c in cm.index])
     a1.set_xlim(-10, cap + 45)
     a1.set_xlabel("소위 회부 → 소위 상정(일)")
     a1.legend(loc="lower right", fontsize=8.5, frameon=True)
-    a1.set_title("관찰값만 보면 순서가 뒤집힌다")
+    a1.set_title("끝난 것만 보면 순서가 뒤집힌다")
     a2.barh(y, cm["상정 도달 비율"], color=ORANGE)
     for i, v in enumerate(cm["상정 도달 비율"]):
         a2.text(v + 0.01, i, f"{v:.0%}", va="center", fontsize=8.5)
     a2.set_xlim(0, 1.1)
-    a2.set_xlabel("소위 회부 의안 중 상정까지 간 비율")
-    a2.set_title("상정 도달 비율")
+    a2.set_xlabel("소위로 넘어간 법률안 중 안건에 오른 비율")
+    a2.set_title("안건에 오른 비율")
     fig.suptitle("H5  소위 상정까지 걸리는 시간은 위원회마다 크게 다르다(상정 30건 이상 16개 상임위)", fontsize=13)
     fig.text(0.01, 0.005, A.SOURCE + " · 위원회 개편 전후 이름 묶음 · 순위 평가가 아니라 차이의 크기를 보이는 그림",
              fontsize=8, color="#666")
@@ -202,7 +212,7 @@ def fig9_member_vs_gov(log):
         s = A.km_curve(dur, ev)
         med = A.km_median(dur, ev)
         ax.step(s.index, s.values, where="post", color=c, lw=2.5,
-                label=f"{k}안 (소위 회부 {len(dur):,}건, 상정 도달 {ev.mean():.0%}) · KM 중앙 {med:.0f}일")
+                label=f"{k}안 (소위로 넘어간 {len(dur):,}건 중 {ev.mean():.0%} 안건 상정) · 기다리는 법률안 포함 중앙 {med:.0f}일")
         ax.plot([med, med], [0, 0.5], color=c, ls=":", lw=1.2)
         ax.annotate(f"{med:.0f}일", (med, 0.03), color=c, fontsize=10, ha="center", fontweight="bold")
     ax.axhline(0.5, color="black", lw=0.8, ls="--")
@@ -233,11 +243,11 @@ def fig10_alternatives():
         a1.text(i, v, f"{v}", ha="center", va="bottom", fontsize=9)
     n_alt = int(dist["대안 수"].sum())
     med = float(dist.loc[dist["대안 수"].cumsum() >= n_alt / 2, "흡수한 원안 수"].iloc[0])
-    a1.set_xlabel("대안 1건이 흡수한 원안 수")
+    a1.set_xlabel("대안 1건이 흡수한 법률안 수")
     a1.set_ylabel("대안 수")
     a1.set_title(f"Q8  대안 {n_alt}건 — 중앙값 {med:.0f}건, 최대 {int(dist['흡수한 원안 수'].max())}건")
     steps = q9[~q9["구간"].str.contains("전체")].copy()
-    steps["구간"] = steps["구간"].str.replace("대안 ", "").str.replace("원안 ", "원안 ")
+    steps["구간"] = steps["구간"].map(PLAIN_STEPS)
     y = np.arange(len(steps))[::-1]
     a2.barh(y, steps["중앙값(일)"], color=BLUE, label="중앙값")
     a2.scatter(steps["90분위(일)"], y, color=RED, marker="|", s=200, label="90분위")
@@ -249,8 +259,8 @@ def fig10_alternatives():
     a2.set_xlim(0, max(steps["90분위(일)"]) * 1.35)
     a2.set_xlabel("일")
     a2.legend(loc="upper right", fontsize=8)
-    a2.set_title(f"Q9  대안반영폐기 원안: 소관위 처리 → 대안 본회의 중앙 {tot['중앙값(일)']:.0f}일")
-    fig.suptitle("대안반영폐기의 뒤편: 대안 하나가 원안 여러 건을 흡수하고, 기다림은 대안의 법사위 단계에서 생긴다", fontsize=12.5)
+    a2.set_title(f"Q9  대안반영폐기된 법률안: 위원회 처리 → 대안 본회의 통과 중앙 {tot['중앙값(일)']:.0f}일")
+    fig.suptitle("대안반영폐기의 뒤편: 대안 하나가 법률안 여러 건을 흡수하고, 기다림은 대안의 법사위 검토에서 생긴다", fontsize=12.5)
     fig.text(0.01, 0.005, "출처: 열린국회정보, 국회의원 발의법률안·법률안 심사 및 처리(의안검색), 2026-10-15 조회 · "
              "원안-대안 연결은 BILL_ID_REF 조회", fontsize=8, color="#666")
     fig.tight_layout(rect=(0, 0.03, 1, 0.94))

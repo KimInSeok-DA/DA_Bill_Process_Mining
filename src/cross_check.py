@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "outputs"
 LOG = (ROOT / "data" / "processed" / "event_log.csv").as_posix()
 LINKS = (ROOT / "data" / "processed" / "alt_links.csv").as_posix()
-QUERY_DATE = "2026-10-15"
+QUERY_DATE = json.loads((ROOT / "data" / "processed" / "build_report.json").read_text(encoding="utf-8"))["query_date"]
 
 con = duckdb.connect()
 con.execute(f"""

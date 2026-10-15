@@ -24,8 +24,10 @@ import pm4py  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "outputs"
-QUERY_DATE = pd.Timestamp("2026-10-15")
-SOURCE = "출처: 열린국회정보, 국회의원 발의법률안·법률안 심사 및 처리(의안검색)·소위 심사정보(법률안), 2026-10-15 조회"
+# 조회일: 이벤트 로그를 만들 때 기록한 수집 조회일(진행 중 의안의 경과일 기준)
+QUERY_DATE = pd.Timestamp(json.loads((ROOT / "data" / "processed" / "build_report.json").read_text(encoding="utf-8"))["query_date"])
+SOURCE = ("출처: 열린국회정보, 국회의원 발의법률안·법률안 심사 및 처리(의안검색)·소위 심사정보(법률안), "
+          f"{QUERY_DATE.date()} 조회")
 
 # H5: 위원회 개편 전후 이름 묶기(1015_04 4절)
 RENAME = {
@@ -196,8 +198,8 @@ def draw_map(log, freq, perf, path, min_freq=600):
     ax.set_ylim(0.3, 11.7)
     ax.axis("off")
     ax.set_title(f"원안(의원·정부 제출) 법률안 처리 흐름(22대, 직접 이어진 횟수 {min_freq}건 이상)\n"
-                 "상자: 활동이 있는 의안 수(주황은 끝 활동) · 화살표: 이어진 횟수와 대기일 중앙값", fontsize=13)
-    fig.text(0.01, 0.01, SOURCE + f" · 진행 중 의안 포함 · 재회부·철회 등 {min_freq}건 미만 흐름은 생략",
+                 "상자: 그 단계를 거친 법률안 수(주황은 마지막 결과) · 화살표: 바로 이어진 횟수와 걸린 날수(중앙값)", fontsize=13)
+    fig.text(0.01, 0.01, SOURCE + f" · 처리 중인 법률안 포함 · 재회부·철회 등 {min_freq}건 미만 흐름은 생략",
              fontsize=8, color="#666")
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -208,17 +210,17 @@ def draw_waits(waits, bl, path):
     bl_map = {STATE_PAIR[s]: (n, e) for s, n, e in zip(bl["state"], bl["건수"], bl["경과중앙값"]) if s in STATE_PAIR}
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 6.5), sharey=True)
     y = range(len(w))
-    a1.barh(y, w["중앙값(일)"], color="#3b6ea5", label="중앙값")
+    a1.barh(y, w["중앙값(일)"], color="#3b6ea5", label="끝난 법률안 기준 중앙값")
     a1.scatter(w["90분위(일)"], y, color="#c0392b", marker="|", s=200, label="90분위")
     km = w["KM 중앙값(일)"].where(w["구간"] != "소관위 처리 → 대안 본회의 통과")
-    a1.scatter(km, y, color="black", marker="D", s=30, label="KM 중앙값(기다리는 의안 포함)")
+    a1.scatter(km, y, color="black", marker="D", s=30, label="기다리는 법률안까지 포함한 중앙값")
     for i, (m, n, k, q) in enumerate(zip(w["중앙값(일)"], w["관찰 건수"], km, w["90분위(일)"])):
-        txt = f"{m:.0f}일 (n={n:,})" + (f" · KM {k:.0f}일" if pd.notna(k) and k > m else "")
+        txt = f"{m:.0f}일 (n={n:,})" + (f" · 포함하면 {k:.0f}일" if pd.notna(k) and k > m else "")
         a1.text(max(m, q, k if pd.notna(k) else 0) + 10, i, txt, va="center", fontsize=8)
     a1.set_yticks(list(y))
     a1.set_yticklabels(w["구간"])
     a1.set_xlabel("일")
-    a1.set_title("구간 대기: 관찰값(두 활동이 모두 있는 의안)과 KM 중앙값")
+    a1.set_title("구간별 기다린 날수: 끝난 법률안 기준과 기다리는 법률안까지 포함")
     a1.set_xlim(0, 820)
     a1.legend(loc="lower right", fontsize=8)
     cnt = [bl_map.get((a, b), (0, 0))[0] for a, b in zip(w["A"], w["B"])]
@@ -226,11 +228,11 @@ def draw_waits(waits, bl, path):
     a2.barh(y, cnt, color="#e08e45")
     for i, (c, e) in enumerate(zip(cnt, ela)):
         if c:
-            a2.text(c + 80, i, f"{c:,}건 · 경과 중앙 {e:.0f}일", va="center", fontsize=8)
-    a2.set_xlabel("진행 중 의안 수")
-    a2.set_title("지금 이 구간에서 기다리는 의안(조회일 기준)")
-    a2.set_xlim(0, max(cnt) * 1.45)
-    fig.suptitle("구간별 대기: 끝난 의안의 대기와 지금 기다리는 의안을 함께 본다", fontsize=13)
+            a2.text(c + 80, i, f"{c:,}건 · 기다린 지 중앙 {e:.0f}일", va="center", fontsize=8)
+    a2.set_xlabel("처리 중인 법률안 수")
+    a2.set_title("지금 이 구간에서 기다리는 법률안(조회일 기준)")
+    a2.set_xlim(0, max(cnt) * 1.6)
+    fig.suptitle("구간별 기다림: 끝난 법률안과 지금 기다리는 법률안을 함께 본다", fontsize=13)
     fig.text(0.01, 0.005, SOURCE, fontsize=8, color="#666")
     fig.tight_layout(rect=(0, 0.03, 1, 0.95))
     fig.savefig(path, dpi=150)
@@ -247,9 +249,9 @@ def draw_batch(batch_tab, path):
         bottom = batch_tab[c] if bottom is None else bottom + batch_tab[c]
     for i, t in enumerate(batch_tab[cols].sum(axis=1)):
         ax.text(i, t, f"{t:,}", ha="center", va="bottom", fontsize=9)
-    ax.set_xlabel("같은 날 같은 위원회에서 함께 처리된 의안 수(묶음 크기)")
-    ax.set_ylabel("소관위 처리 의안 수")
-    ax.set_title("소관위 처리는 대부분 여러 의안을 한꺼번에 처리한다")
+    ax.set_xlabel("같은 날 같은 위원회에서 함께 처리된 법률안 수(묶음 크기)")
+    ax.set_ylabel("소관위에서 처리된 법률안 수")
+    ax.set_title("소관위는 대부분 여러 법률안을 한꺼번에 처리한다")
     ax.legend()
     fig.text(0.01, 0.005, SOURCE, fontsize=7, color="#666")
     fig.tight_layout(rect=(0, 0.04, 1, 1))
