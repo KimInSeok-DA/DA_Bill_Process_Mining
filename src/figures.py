@@ -72,8 +72,8 @@ def fig4_survival(log):
 
 
 def fig5_meetings(log):
-    cmt = log[log["activity"] == "소관위 처리"]
-    m = cmt.groupby(["committee_n", "date"]).agg(n=("case_id", "size"),
+    cmt = log[log["activity"] == "소관위 처리"].fillna({"committee_n": "위원회 미확정"})
+    m = cmt.groupby(["committee_n", "date"], dropna=False).agg(n=("case_id", "size"),
                                                  alt=("stage_result", lambda s: s.isin(A.ALT).mean())).reset_index()
     m["ts"] = pd.to_datetime(m["date"])
     order = m.groupby("committee_n")["n"].sum().sort_values().index
@@ -89,7 +89,7 @@ def fig5_meetings(log):
               borderpad=1, frameon=True)
     cb = fig.colorbar(sc, ax=ax, pad=0.01, shrink=0.6)
     cb.set_label("그중 대안반영폐기 비율")
-    share = (cmt.groupby(["committee_n", "date"])["case_id"].transform("size") >= 2).mean()
+    share = (cmt.groupby(["committee_n", "date"], dropna=False)["case_id"].transform("size") >= 2).mean()
     ax.set_title(f"H2  위원회는 의안을 하나씩이 아니라 묶어서 처리한다\n"
                  f"점 하나 = 위원회 회의 하루({len(m)}번) · 소관위 처리 {len(cmt):,}건 중 {share:.1%}가 2건 이상 묶음",
                  fontsize=13)
