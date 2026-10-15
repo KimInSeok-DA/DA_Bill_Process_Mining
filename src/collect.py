@@ -1,10 +1,13 @@
-"""열린국회정보 「국회의원 발의법률안」(nzmimeepazxkubdpn) 전체 페이지를 받아 data/raw/에 저장한다.
+"""열린국회정보 의안 API 전체 페이지를 받아 data/raw/에 저장한다.
+
+- bills: 「국회의원 발의법률안」(nzmimeepazxkubdpn) — 의안 1건 1행, 단계별 날짜
+- subcommittee: 「소위 심사정보(법률안)」(TVBPMCONFINFO) — 소위 회부·상정·처리일
 
 - 인증키는 .env의 ASSEMBLY_API_KEY로만 읽고, 출력에는 남기지 않는다.
 - 이미 저장된 페이지는 다시 부르지 않는다(같은 조회일 폴더 기준).
-- 끝나면 저장된 행 수·고유 BILL_ID 수를 list_total_count와 대조한다.
+- 끝나면 저장된 행 수를 list_total_count와 대조한다(bills는 고유 BILL_ID 수도).
 
-실행: .venv/Scripts/python src/collect.py [--age 22] [--date YYYYMMDD]
+실행: .venv/Scripts/python src/collect.py [--service bills|subcommittee] [--age 22] [--date YYYYMMDD]
 """
 
 import argparse
@@ -18,8 +21,11 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-SERVICE = "nzmimeepazxkubdpn"
-URL = f"https://open.assembly.go.kr/portal/openapi/{SERVICE}"
+# 이름: (요청 코드, 서비스 메뉴명, BILL_ID가 행마다 고유한지)
+SERVICES = {
+    "bills": ("nzmimeepazxkubdpn", "국회의원 발의법률안", True),
+    "subcommittee": ("TVBPMCONFINFO", "소위 심사정보(법률안)", False),
+}
 PAGE_SIZE = 1000  # API 최대(1,001건 요청 시 ERROR-336)
 SLEEP_SEC = 1.0
 MAX_RETRY = 5
@@ -27,16 +33,17 @@ MAX_RETRY = 5
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def fetch_page(key: str, age: int, page: int) -> dict:
+def fetch_page(service: str, key: str, age: int, page: int) -> dict:
     """한 페이지를 받는다. 실패하면 간격을 늘려 다시 시도한다."""
+    url = f"https://open.assembly.go.kr/portal/openapi/{service}"
     params = {"KEY": key, "Type": "json", "pIndex": page, "pSize": PAGE_SIZE, "AGE": age}
     for attempt in range(1, MAX_RETRY + 1):
         try:
-            r = requests.get(URL, params=params, timeout=60)
+            r = requests.get(url, params=params, timeout=60)
             r.raise_for_status()
             data = r.json()
-            if SERVICE in data:
-                code = data[SERVICE][0]["head"][1]["RESULT"]["CODE"]
+            if service in data:
+                code = data[service][0]["head"][1]["RESULT"]["CODE"]
                 if code == "INFO-000":
                     return data
             else:
@@ -51,6 +58,7 @@ def fetch_page(key: str, age: int, page: int) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--service", choices=SERVICES, default="bills")
     ap.add_argument("--age", type=int, default=22)
     ap.add_argument("--date", default=date.today().strftime("%Y%m%d"), help="조회일 폴더(이어받기용)")
     args = ap.parse_args()
@@ -60,6 +68,7 @@ def main() -> None:
     if not key:
         sys.exit(".env에 ASSEMBLY_API_KEY가 없습니다")
 
+    SERVICE, service_name, unique_bill = SERVICES[args.service]
     out_dir = ROOT / "data" / "raw" / SERVICE / f"AGE{args.age}_{args.date}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -68,7 +77,7 @@ def main() -> None:
     if first.exists():
         data = json.loads(first.read_text(encoding="utf-8"))
     else:
-        data = fetch_page(key, args.age, 1)
+        data = fetch_page(SERVICE, key, args.age, 1)
         first.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         time.sleep(SLEEP_SEC)
     total = data[SERVICE][0]["head"][0]["list_total_count"]
@@ -79,7 +88,7 @@ def main() -> None:
         path = out_dir / f"p{page:03d}.json"
         if path.exists():
             continue
-        data = fetch_page(key, args.age, page)
+        data = fetch_page(SERVICE, key, args.age, page)
         path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         print(f"  page {page}/{n_pages} 저장 ({len(data[SERVICE][1]['row'])}건)")
         time.sleep(SLEEP_SEC)
@@ -95,7 +104,7 @@ def main() -> None:
 
     manifest = {
         "service": SERVICE,
-        "service_name": "국회의원 발의법률안",
+        "service_name": service_name,
         "age": args.age,
         "query_date": f"{args.date[:4]}-{args.date[4:6]}-{args.date[6:]}",
         "list_total_count": sorted(totals),
@@ -105,8 +114,9 @@ def main() -> None:
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    if len(totals) == 1 and len(rows) == len(unique_ids) == total:
-        print("대조 통과: 행 수 = 고유 BILL_ID 수 = list_total_count")
+    ok = len(totals) == 1 and len(rows) == total and (not unique_bill or len(unique_ids) == total)
+    if ok:
+        print("대조 통과: 행 수 = list_total_count" + (" = 고유 BILL_ID 수" if unique_bill else ""))
     else:
         sys.exit("대조 불일치: 수집 중 데이터가 바뀌었을 수 있음. 새 --date 폴더로 다시 받으세요")
 
