@@ -3,7 +3,7 @@
 ## 현재 상태 (2026-10-15)
 
 - 설정: `AGENTS.md`·`CLAUDE.md`·`.gitignore`·`.gitattributes`·`.env.example`·`.claude/settings.json`(attribution 끔)·`.githooks/`(`core.hooksPath` 설정됨)·`.python-version`(3.14), `git init`
-- GitHub(10-15): `main`에 README·설정(PR #1), 수집·날짜 필드 정의(PR #2), 소위 수집(PR #3), 이벤트 로그(PR #4), 분석(PR #5), 교차 검증(PR #6) 병합. 현재 브랜치 `scope-v2`(커밋 전). 계속 바뀌는 문서·`requirements.txt`는 단계가 끝날 때 그 브랜치로 올림. 커밋·푸시는 사용자 요청 시에만, PR 제목·본문은 알려 주면 사용자가 붙여 넣음
+- GitHub(10-15): `main`에 README·설정(PR #1), 수집·날짜 필드 정의(PR #2), 소위 수집(PR #3), 이벤트 로그(PR #4), 분석(PR #5), 교차 검증(PR #6), 범위 확장(PR #7) 병합. 현재 브랜치 `report`(커밋 전). 계속 바뀌는 문서·`requirements.txt`는 단계가 끝날 때 그 브랜치로 올림. 커밋·푸시는 사용자 요청 시에만, PR 제목·본문은 알려 주면 사용자가 붙여 넣음
 - `.env`에 `ASSEMBLY_API_KEY` 있음. 10-15 동작 확인: 「국회의원 발의법률안」(`nzmimeepazxkubdpn`) AGE=22 19,917건, 단계 날짜 필드 있음(`_private/02_로드맵.md` 1절)
 - 환경(10-15): `.venv` Python 3.14.5, `requirements.txt`는 `pip freeze` 고정(pm4py 2.7.23.10·pandas 3.0.6·duckdb 1.5.6). 3.12 대신 3.14: PC에 3.14만 설치돼 있고 pm4py·의존 패키지가 3.14 Windows 휠을 제공(설치·import 확인)
 - 수집 완료(10-15): `src/collect.py` → `data/raw/nzmimeepazxkubdpn/AGE22_20261015/`(20페이지 + `manifest.json`). 행 19,917 = 고유 `BILL_ID` 19,917 = `list_total_count` 19,917. 제안일 2024-05-30～2026-10-14
@@ -30,12 +30,15 @@
   - H1～H6 원안 기준 재계산, 판정 그대로(1015_04 11절). 교차 검증 310/310(H5·H6·Q8 대조 추가)
   - 실행 순서: `collect.py --service bills|subcommittee|allbills|altref` → `build_event_log.py` → `analysis.py` → `figures.py` → `cross_check.py`
 
+- 보고서(10-15, [1015_07](docs/의사결정/1015_07_보고서와_공개범위.md)): `outputs/report.md`(1쪽, 그림 1·4·10), `README.md` 전면 수정, `docs/용어.md`. 이벤트 로그 CSV는 비공개(README에 다시 만드는 방법)
+
 ## 다음 작업
 
-1. **`scope-v2` 커밋 시점**(사용자 요청 대기)
-2. report: `outputs/report.md`(1쪽, 그림 3장 고르기), README(**현재 의원발의 범위로 쓰여 있어 전면 수정 필요**: 첫 표·출처 3개 서비스·실행 순서·한계), 이벤트 로그 CSV 공개 방식 결정, `outputs/.gitkeep` 제거, 최종 점검(키·회사명·`～`)
-3. 저장소 공개(사용자), 지원서 반영
+1. **`report` 커밋 시점**(사용자 요청 대기)
+2. GitHub에서 README·보고서가 잘 보이는지 확인(그림, 표, `<details>` 접기) → 저장소 공개(사용자)
+3. 지원서 반영: 포트폴리오 MINI 1장, 지원(10-29～31, 마감 11-01)
+4. 남은 선택 과제: 열린국회정보 재배포 조건 확인 뒤 CSV 공개 검토, 위원회 회의정보 추가(위원회 처리 뒤 재심사)
 
 ## 열린 결정
 
-- 이벤트 로그 CSV: 최종본을 올릴지, README에 만드는 방법(수집 → 생성 스크립트)만 안내할지 report 단계에서 결정
+- 없음(CSV 공개는 재배포 조건 확인 뒤 선택 과제)
