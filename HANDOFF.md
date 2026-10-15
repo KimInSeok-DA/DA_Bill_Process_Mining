@@ -3,7 +3,7 @@
 ## 현재 상태 (2026-10-15)
 
 - 설정: `AGENTS.md`·`CLAUDE.md`·`.gitignore`·`.gitattributes`·`.env.example`·`.claude/settings.json`(attribution 끔)·`.githooks/`(`core.hooksPath` 설정됨)·`.python-version`(3.14), `git init`
-- GitHub(10-15): `main`에 README·설정(PR #1), 수집·날짜 필드 정의(PR #2), 소위 수집(PR #3) 병합. 현재 브랜치 `event-log-v1`(커밋 전). 계속 바뀌는 문서·`requirements.txt`는 단계가 끝날 때 그 브랜치로 올림. 커밋·푸시는 사용자 요청 시에만, PR 제목·본문은 알려 주면 사용자가 붙여 넣음
+- GitHub(10-15): `main`에 README·설정(PR #1), 수집·날짜 필드 정의(PR #2), 소위 수집(PR #3), 이벤트 로그(PR #4) 병합. 현재 브랜치 `analysis`(커밋 전). 계속 바뀌는 문서·`requirements.txt`는 단계가 끝날 때 그 브랜치로 올림. 커밋·푸시는 사용자 요청 시에만, PR 제목·본문은 알려 주면 사용자가 붙여 넣음
 - `.env`에 `ASSEMBLY_API_KEY` 있음. 10-15 동작 확인: 「국회의원 발의법률안」(`nzmimeepazxkubdpn`) AGE=22 19,917건, 단계 날짜 필드 있음(`_private/02_로드맵.md` 1절)
 - 환경(10-15): `.venv` Python 3.14.5, `requirements.txt`는 `pip freeze` 고정(pm4py 2.7.23.10·pandas 3.0.6·duckdb 1.5.6). 3.12 대신 3.14: PC에 3.14만 설치돼 있고 pm4py·의존 패키지가 3.14 Windows 휠을 제공(설치·import 확인)
 - 수집 완료(10-15): `src/collect.py` → `data/raw/nzmimeepazxkubdpn/AGE22_20261015/`(20페이지 + `manifest.json`). 행 19,917 = 고유 `BILL_ID` 19,917 = `list_total_count` 19,917. 제안일 2024-05-30～2026-10-14
@@ -17,12 +17,17 @@
   - 규칙 제외 34개(철회일 복사 26, 결과 없는 소관위 처리 4, 심사미료 3, 원 시스템 입력 오류 1), 소위 중복 합침 93개. 활동별 처리 전후 건수 일치(코드가 대조)
   - 같은 날은 `step_order`로 정렬(pm4py는 동점 시 행 순서를 따름). 소위가 먼저 심사한 경로는 소관위 상정을 소위 처리 뒤(6.5), 위원회가 바뀐 의안 301건은 "소관위 재회부"
   - 남은 역행 384건은 모두 재회부·직접 회부 경로. 민감도: 뺀 이벤트를 넣어도 주요 중앙값 동일
+- 분석(10-15, [1015_04](docs/의사결정/1015_04_분석_가설.md)): `src/analysis.py` → `outputs/`(그림 3장, 표 7개, `analysis_results.json`). 가설·기준을 결과 전에 기록
+  - H1 미리 정한 기준 미달(관찰 중앙값 3위), 그러나 KM 531일·계류 9,667건 1위 / H2·H3·H4·H5 지지 / H6 지지 안 함(27.8%)
+  - H5 위원회 개편 전후 이름 묶음(옛 이름 의안은 100% 완료라 묶지 않으면 처리 상태 비교가 됨)
+  - 프로세스 지도는 pm4py 수치 + matplotlib(Graphviz 실행 파일 없음)
+  - 가설별 그림 `src/figures.py`(그림 4～8: 생존곡선·버블 타임라인·상자그림·덤벨·히트맵, seaborn). 보고서에는 3장을 고름
 
 ## 다음 작업
 
-1. **`event-log-v1` 커밋 시점**(사용자 요청 대기): `src/build_event_log.py`, `docs/의사결정/1015_03_이벤트로그_정의.md`, `data/processed/build_report.json`, `.gitignore`, 작업 문서. CSV(`event_log.csv` 15MB, `excluded_events.csv`)는 올리지 않음(사용자 결정 10-15)
-2. analysis 브랜치: 가설을 먼저 세우고 사용자가 고름 → pm4py로 경로 지도·단계별 대기·계류·대안반영폐기 경로. 완료 기준과 조회일 경과 기준을 나눠 보임. 남은 확인: 재회부 분리 뒤 "제안 → 회부 30일 초과" 164건
-3. cross-check(pandas·DuckDB로 지표 재계산) → report(보고서·README·출처)
+1. **`analysis` 커밋 시점**(사용자 요청 대기): `src/analysis.py`, `src/figures.py`, `docs/의사결정/1015_04_분석_가설.md`, `outputs/`, `requirements.txt`(seaborn 추가), 작업 문서
+2. cross-check 브랜치: 핵심 지표 3개 이상을 pm4py·pandas와 다른 방법(DuckDB SQL)으로 다시 계산해 대조. 후보: 직접 이어짐 빈도(pm4py DFG ↔ SQL), 구간 대기 중앙값(pandas ↔ SQL), 계류 단계 분포, 묶음 비율, KM 중앙값(직접 구현 ↔ 다른 계산)
+3. report: `outputs/report.md`(1쪽), README(첫 표·출처·실행 방법·한계), 이벤트 로그 CSV 공개 방식 결정
 
 ## 열린 결정
 
