@@ -1,6 +1,8 @@
 """핵심 지표를 DuckDB SQL로 처음부터 다시 계산해 pm4py·pandas 결과와 대조한다. 정의: docs/의사결정/1015_05_교차검증.md
 
-- 입력은 이벤트 로그 CSV 하나다. analysis.py의 함수는 쓰지 않는다(같은 코드를 다시 돌리는 것은 검증이 아니다)
+- 입력은 이벤트 로그 CSV와 원안-대안 연결 CSV다. analysis.py의 함수는 쓰지 않는다(같은 코드를 다시 돌리는 것은 검증이 아니다)
+- ①～⑤는 원안(의원·정부) 기준, ⑥은 의원·정부별 KM, ⑦은 대안반영폐기 원안의 대안 경로(1015_06 Q7·Q9),
+  ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8)
 - 대조 대상: outputs/tables/*.csv, outputs/analysis_results.json
 - 일치 기준: 건수는 완전 일치, 중앙값·분위수·KM 중앙값은 같은 정의에서 완전 일치(소수점 오차 1e-9)
 - 출력: outputs/cross_check.csv. 하나라도 어긋나면 실패로 끝난다
@@ -18,6 +20,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "outputs"
 LOG = (ROOT / "data" / "processed" / "event_log.csv").as_posix()
+LINKS = (ROOT / "data" / "processed" / "alt_links.csv").as_posix()
 QUERY_DATE = "2026-10-15"
 
 con = duckdb.connect()
@@ -27,9 +30,9 @@ SELECT *, row_number() OVER () AS rn
 FROM read_csv('{LOG}', header = true, all_varchar = true, quote = '"', escape = '"')
 """)
 con.execute("""
-CREATE TABLE e AS
+CREATE TABLE eall AS
 SELECT case_id, activity, CAST(date AS DATE) AS d, CAST(step_order AS DOUBLE) AS o, committee,
-       stage_result, case_status, rn,
+       stage_result, case_status, proposer_kind, case_group, final_result, rn,
        -- 구간 계산용 이름(1015_04 2절): 끝 활동 묶음, 재회부는 회부로, 소위 뒤 소관위 상정은 따로
        CASE WHEN activity IN ('가결', '부결', '폐기') THEN '본회의 처리'
             WHEN activity IN ('대안반영폐기', '수정안반영폐기') THEN '대안 본회의 통과'
@@ -42,6 +45,8 @@ SELECT case_id, activity, CAST(date AS DATE) AS d, CAST(step_order AS DOUBLE) AS
                       ELSE committee END AS cmt
 FROM ev
 """)
+con.execute("CREATE TABLE e AS SELECT * FROM eall WHERE case_group = '원안'")
+con.execute(f"CREATE TABLE lk AS SELECT * FROM read_csv('{LINKS}', header = true, all_varchar = true)")
 
 PAIRS = [
     ("제안", "소관위 회부"), ("소관위 회부", "소관위 상정"), ("소관위 상정", "소위 회부"),
@@ -171,10 +176,102 @@ check("④ 묶음 처리", "(위원회, 날짜) 수", h2["meeting_days"], b["day
 check("④ 묶음 처리", "대안반영폐기 묶음 비율", h2["share_ge2_by_result"]["대안반영폐기"], round(b["share_alt"], 3))
 check("④ 묶음 처리", "가결 묶음 비율", h2["share_ge2_by_result"]["가결"], round(b["share_pass"], 3))
 
+# ⑥ 의원·정부별 소위 회부 → 상정 KM 중앙값(Q7)
+for kind in ("의원", "정부"):
+    km = q(f"""
+    WITH ff AS (SELECT f.* FROM f JOIN (SELECT DISTINCT case_id FROM e WHERE proposer_kind = '{kind}') USING (case_id)),
+    base AS (
+      SELECT a.case_id, a.d AS da, b.d AS db, c.cd
+      FROM ff a LEFT JOIN ff b ON b.case_id = a.case_id AND b.act2 = '소위 상정'
+      JOIN cens c ON c.case_id = a.case_id
+      WHERE a.act2 = '소위 회부' AND (b.d IS NULL OR b.d >= a.d)
+    ), s AS (SELECT greatest(coalesce(db, cd) - da, 0) AS t, (db IS NOT NULL)::INT AS ev FROM base),
+    g AS (SELECT t, sum(ev) AS dth, count(*) AS cnt FROM s GROUP BY t),
+    r AS (SELECT t, dth, sum(cnt) OVER (ORDER BY t DESC) AS at_risk FROM g),
+    k AS (SELECT t, sum(CASE WHEN dth = at_risk THEN -1e9 ELSE ln(1 - dth / at_risk) END) OVER (ORDER BY t) AS ls FROM r)
+    SELECT (SELECT count(*) FROM base) AS n_a, min(t) FILTER (WHERE exp(ls) <= 0.5) AS med FROM k
+    """).iloc[0]
+    check("⑥ 의원·정부 KM", f"{kind} 소위 회부 의안", res["Q7"][kind]["소위 회부 의안"], km["n_a"])
+    check("⑥ 의원·정부 KM", f"{kind} 소위 회부 → 상정 KM 중앙값", res["Q7"][kind]["소위 회부 → 상정 KM 중앙값"], km["med"])
+
+# ⑦ 대안반영폐기 원안의 대안 경로(Q9): 연결 표 조인
+con.execute("""
+CREATE TABLE fa AS SELECT case_id, activity, min(d) AS d FROM eall GROUP BY case_id, activity
+""")
+con.execute("""
+CREATE TABLE seg AS
+SELECT
+  (SELECT d FROM fa WHERE fa.case_id = lk.orig_bill_id AND activity = '소관위 처리') AS o_cmt,
+  (SELECT d FROM fa WHERE fa.case_id = lk.alt_bill_id AND activity = '소관위 처리') AS a_cmt,
+  (SELECT d FROM fa WHERE fa.case_id = lk.alt_bill_id AND activity = '법사위 회부') AS a_ls,
+  (SELECT d FROM fa WHERE fa.case_id = lk.alt_bill_id AND activity = '법사위 처리') AS a_lp,
+  (SELECT d FROM fa WHERE fa.case_id = lk.alt_bill_id AND activity = '위원회 제출') AS a_sub,
+  (SELECT min(d) FROM eall WHERE eall.case_id = lk.alt_bill_id AND o = 11) AS a_end
+FROM lk
+WHERE orig_bill_id IN (SELECT DISTINCT case_id FROM e WHERE final_result IN ('대안반영폐기', '수정안반영폐기'))
+""")
+segs = [("원안 소관위 처리", "대안 소관위 처리", "o_cmt", "a_cmt"), ("대안 소관위 처리", "대안 법사위 회부", "a_cmt", "a_ls"),
+        ("대안 법사위 회부", "대안 법사위 처리", "a_ls", "a_lp"), ("대안 법사위 처리", "대안 위원회 제출", "a_lp", "a_sub"),
+        ("대안 위원회 제출", "대안 본회의", "a_sub", "a_end"), ("원안 소관위 처리", "대안 본회의(전체)", "o_cmt", "a_end")]
+check("⑦ 대안 경로", "연결된 대안반영폐기 원안 쌍", res["Q9"]["linked_absorbed_pairs"], int(q("SELECT count(*) AS n FROM seg")["n"][0]))
+for x, y, cx, cy in segs:
+    name = f"{x} → {y}"
+    r = q(f"SELECT count(*) AS n, median({cy} - {cx}) AS med, quantile_cont({cy} - {cx}, 0.9) AS p90 "
+          f"FROM seg WHERE {cx} IS NOT NULL AND {cy} IS NOT NULL").iloc[0]
+    check("⑦ 대안 경로", f"{name} 건수", res["Q9"]["segments"][name]["n"], r["n"])
+    check("⑦ 대안 경로", f"{name} 중앙값", res["Q9"]["segments"][name]["median"], r["med"])
+    check("⑦ 대안 경로", f"{name} 90분위", res["Q9"]["segments"][name]["p90"], r["p90"])
+
+# ⑧ 위원회별 소위 회부 → 상정 KM 중앙값(H5): 위원회는 그 단계를 맡은 위원회(개편 전후 이름 묶음), 특별위원회 제외
+h5 = pd.read_csv(OUT / "tables" / "h5_committee.csv", index_col=0)
+km5 = q("""
+WITH sub AS (
+  SELECT cmt, case_id, min(d) FILTER (WHERE activity = '소위 회부') AS da, min(d) FILTER (WHERE activity = '소위 상정') AS db
+  FROM e WHERE activity IN ('소위 회부', '소위 상정') AND cmt IS NOT NULL AND cmt NOT LIKE '%특별위원회%'
+  GROUP BY cmt, case_id
+), base AS (
+  SELECT s.cmt, greatest(coalesce(s.db, c.cd) - s.da, 0) AS t, (s.db IS NOT NULL)::INT AS ev
+  FROM sub s JOIN cens c USING (case_id) WHERE s.da IS NOT NULL AND (s.db IS NULL OR s.db >= s.da)
+), g AS (SELECT cmt, t, sum(ev) AS dth, count(*) AS cnt FROM base GROUP BY cmt, t),
+r AS (SELECT cmt, t, dth, sum(cnt) OVER (PARTITION BY cmt ORDER BY t DESC) AS at_risk FROM g),
+k AS (SELECT cmt, t, sum(CASE WHEN dth = at_risk THEN -1e9 ELSE ln(1 - dth / at_risk) END)
+             OVER (PARTITION BY cmt ORDER BY t) AS ls FROM r)
+SELECT cmt, min(t) FILTER (WHERE exp(ls) <= 0.5) AS med FROM k GROUP BY cmt
+""").set_index("cmt")["med"]
+for c in h5.index.union(km5.index):
+    check("⑧ 위원회별 KM 중앙값(H5)", c, h5["KM중앙값"].get(c), km5.get(c))
+
+# ⑨ 월별 끝 활동·소관위 처리 건수(H6)
+h6 = pd.read_csv(OUT / "tables" / "h6_monthly.csv", index_col=0)
+m6 = q("""
+SELECT strftime(d, '%Y-%m') AS m, count(*) FILTER (WHERE o = 11) AS ends,
+       count(*) FILTER (WHERE activity = '소관위 처리') AS cmt
+FROM e GROUP BY m
+""").set_index("m")
+for m in h6.index:
+    check("⑨ 월별 건수(H6)", f"{m} 끝 활동", h6.loc[m, "끝 활동"], m6["ends"].get(m, 0))
+    check("⑨ 월별 건수(H6)", f"{m} 소관위 처리", h6.loc[m, "소관위 처리"], m6["cmt"].get(m, 0))
+
+# ⑩ 대안당 원안 수(Q8)
+q8 = q("""
+WITH a AS (SELECT DISTINCT case_id FROM eall WHERE case_group = '위원회안'),
+n AS (SELECT a.case_id, count(lk.orig_bill_id) AS k FROM a LEFT JOIN lk ON lk.alt_bill_id = a.case_id GROUP BY a.case_id)
+SELECT count(*) FILTER (WHERE k > 0) AS alts, median(k) FILTER (WHERE k > 0) AS med,
+       quantile_cont(k, 0.9) FILTER (WHERE k > 0) AS p90, max(k) AS mx, sum(k) AS rows_ FROM n
+""").iloc[0]
+check("⑩ 대안당 원안 수(Q8)", "원안과 연결된 대안", res["Q8"]["alts_with_origins"], q8["alts"])
+check("⑩ 대안당 원안 수(Q8)", "연결 행", res["Q8"]["link_rows"], q8["rows_"])
+check("⑩ 대안당 원안 수(Q8)", "중앙값", res["Q8"]["origins_per_alt_median"], q8["med"])
+check("⑩ 대안당 원안 수(Q8)", "90분위", res["Q8"]["origins_per_alt_p90"], q8["p90"])
+check("⑩ 대안당 원안 수(Q8)", "최대", res["Q8"]["origins_per_alt_max"], q8["mx"])
+
 # 기본 건수
 n = q("SELECT count(*) AS ev, count(DISTINCT case_id) AS cs FROM e").iloc[0]
-check("기본", "이벤트 수", res["events"], n["ev"])
-check("기본", "케이스 수", res["cases"], n["cs"])
+na = q("SELECT count(*) AS ev, count(DISTINCT case_id) AS cs FROM eall").iloc[0]
+check("기본", "원안 이벤트 수", res["events"], n["ev"])
+check("기본", "원안 케이스 수", res["cases"], n["cs"])
+check("기본", "전체 이벤트 수", res["events_all"], na["ev"])
+check("기본", "전체 케이스 수", res["cases_all"], na["cs"])
 
 out = pd.DataFrame(rows)
 out.to_csv(OUT / "cross_check.csv", index=False, encoding="utf-8-sig")

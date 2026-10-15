@@ -26,3 +26,6 @@ Thumbs.db
 
 # 가공 데이터(스크립트로 다시 만듦). 대조 결과 build_report.json만 올린다
 data/processed/*.csv
+
+# API 명세서 원본(열린국회정보에서 내려받음, 저장소에 올리지 않음)
+docs/api_spec/

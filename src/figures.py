@@ -5,6 +5,9 @@
 - fig6 H3: 진행 중 의안의 대기 단계별 건수와 경과일 분포
 - fig7 H5: 위원회별 관찰 중앙값 → KM 중앙값(덤벨)과 소위 상정 도달 비율
 - fig8 H6: 연×월 히트맵(끝 활동, 소관위 처리)
+- fig9 Q7: 의원안 대 정부안 생존곡선(소위 회부 → 소위 상정)
+- fig10 Q8·Q9: 대안당 원안 수 분포, 대안반영폐기 원안의 대안 경로 단계별 대기
+- H1～H6 그림은 원안(의원·정부) 기준(1015_06)
 
 실행: .venv/Scripts/python src/figures.py  (analysis.py를 먼저 실행해 outputs/tables가 있어야 함)
 """
@@ -190,14 +193,82 @@ def fig8_calendar():
     plt.close(fig)
 
 
+def fig9_member_vs_gov(log):
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    for k, c in (("의원", BLUE), ("정부", ORANGE)):
+        g = log[log["proposer_kind"] == k]
+        first, censor = A.first_and_censor(g)
+        dur, ev = A.interval(first, censor, "소위 회부", "소위 상정")
+        s = A.km_curve(dur, ev)
+        med = A.km_median(dur, ev)
+        ax.step(s.index, s.values, where="post", color=c, lw=2.5,
+                label=f"{k}안 (소위 회부 {len(dur):,}건, 상정 도달 {ev.mean():.0%}) · KM 중앙 {med:.0f}일")
+        ax.plot([med, med], [0, 0.5], color=c, ls=":", lw=1.2)
+        ax.annotate(f"{med:.0f}일", (med, 0.03), color=c, fontsize=10, ha="center", fontweight="bold")
+    ax.axhline(0.5, color="black", lw=0.8, ls="--")
+    ax.set_xlim(0, 810)
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("소위 회부 뒤 경과일")
+    ax.set_ylabel("아직 소위에 상정되지 않은 비율")
+    ax.legend(loc="upper right", fontsize=9, frameon=True)
+    ax.set_title("Q7  정부안은 의원안보다 소위 상정까지 빨리 간다(생존곡선, Kaplan-Meier)", fontsize=13)
+    fig.text(0.01, 0.005, A.SOURCE,
+             fontsize=8, color="#666")
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.savefig(FIG / "fig9_q7_member_vs_gov.png", dpi=150)
+    plt.close(fig)
+
+
+def fig10_alternatives():
+    dist = pd.read_csv(A.OUT / "tables" / "q8_origins_per_alt.csv")
+    q9 = pd.read_csv(A.OUT / "tables" / "q9_alt_path.csv")
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 5.5), gridspec_kw={"width_ratios": [1, 1.3]})
+    bins = [0, 1, 2, 3, 5, 10, 20, 50, 10**6]
+    labels = ["1", "2", "3", "4～5", "6～10", "11～20", "21～50", "51+"]
+    dist["구간"] = pd.cut(dist["흡수한 원안 수"], bins=bins, labels=labels)
+    b = dist.groupby("구간", observed=False)["대안 수"].sum()
+    a1.bar(b.index.astype(str), b.values, color=ORANGE)
+    a1.tick_params(axis="x", labelsize=8.5)
+    for i, v in enumerate(b.values):
+        a1.text(i, v, f"{v}", ha="center", va="bottom", fontsize=9)
+    n_alt = int(dist["대안 수"].sum())
+    med = float(dist.loc[dist["대안 수"].cumsum() >= n_alt / 2, "흡수한 원안 수"].iloc[0])
+    a1.set_xlabel("대안 1건이 흡수한 원안 수")
+    a1.set_ylabel("대안 수")
+    a1.set_title(f"Q8  대안 {n_alt}건 — 중앙값 {med:.0f}건, 최대 {int(dist['흡수한 원안 수'].max())}건")
+    steps = q9[~q9["구간"].str.contains("전체")].copy()
+    steps["구간"] = steps["구간"].str.replace("대안 ", "").str.replace("원안 ", "원안 ")
+    y = np.arange(len(steps))[::-1]
+    a2.barh(y, steps["중앙값(일)"], color=BLUE, label="중앙값")
+    a2.scatter(steps["90분위(일)"], y, color=RED, marker="|", s=200, label="90분위")
+    for yi, m, q, n in zip(y, steps["중앙값(일)"], steps["90분위(일)"], steps["건수"]):
+        a2.text(max(m, q) + 2, yi, f"{m:.0f}일 (n={n:,})", va="center", fontsize=8.5)
+    a2.set_yticks(y)
+    a2.set_yticklabels(steps["구간"], fontsize=9)
+    tot = q9[q9["구간"].str.contains("전체")].iloc[0]
+    a2.set_xlim(0, max(steps["90분위(일)"]) * 1.35)
+    a2.set_xlabel("일")
+    a2.legend(loc="upper right", fontsize=8)
+    a2.set_title(f"Q9  대안반영폐기 원안: 소관위 처리 → 대안 본회의 중앙 {tot['중앙값(일)']:.0f}일")
+    fig.suptitle("대안반영폐기의 뒤편: 대안 하나가 원안 여러 건을 흡수하고, 기다림은 대안의 법사위 단계에서 생긴다", fontsize=12.5)
+    fig.text(0.01, 0.005, "출처: 열린국회정보, 국회의원 발의법률안·법률안 심사 및 처리(의안검색), 2026-10-15 조회 · "
+             "원안-대안 연결은 BILL_ID_REF 조회", fontsize=8, color="#666")
+    fig.tight_layout(rect=(0, 0.03, 1, 0.94))
+    fig.savefig(FIG / "fig10_q8q9_alternatives.png", dpi=150)
+    plt.close(fig)
+
+
 def main() -> None:
     log = A.load()
+    log = log[log["case_group"] == "원안"].copy()
     fig4_survival(log)
     fig5_meetings(log)
     fig6_backlog(log)
     fig7_committee()
     fig8_calendar()
-    print("저장:", ", ".join(sorted(p.name for p in FIG.glob("fig[4-8]*.png"))))
+    fig9_member_vs_gov(log)
+    fig10_alternatives()
+    print("저장:", ", ".join(sorted(p.name for p in FIG.glob("fig*.png"))))
 
 
 if __name__ == "__main__":

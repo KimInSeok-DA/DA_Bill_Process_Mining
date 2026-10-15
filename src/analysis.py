@@ -1,4 +1,6 @@
-"""이벤트 로그로 가설 H1～H6을 확인한다. 가설·판정 기준: docs/의사결정/1015_04_분석_가설.md
+"""이벤트 로그로 가설 H1～H6과 추가 질문 Q7～Q9를 확인한다. 기준: docs/의사결정/1015_04, 1015_06
+
+- H1～H6: 원안(의원·정부) 기준. Q7: 의원 대 정부, Q8: 대안당 원안 수, Q9: 대안반영폐기 원안의 대안 경로 단계별 대기
 
 - pm4py: 프로세스 지도(직접 이어짐 빈도·대기일 중앙값), 변형 상위
 - pandas: 구간 대기(관찰값), 계류(진행 중 의안의 현재 대기 단계), 묶음 처리, 위원회·월별 집계
@@ -23,7 +25,7 @@ import pm4py  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "outputs"
 QUERY_DATE = pd.Timestamp("2026-10-15")
-SOURCE = "출처: 열린국회정보, 국회의원 발의법률안·소위 심사정보(법률안), 2026-10-15 조회"
+SOURCE = "출처: 열린국회정보, 국회의원 발의법률안·법률안 심사 및 처리(의안검색)·소위 심사정보(법률안), 2026-10-15 조회"
 
 # H5: 위원회 개편 전후 이름 묶기(1015_04 4절)
 RENAME = {
@@ -53,7 +55,8 @@ plt.rcParams["axes.unicode_minus"] = False
 
 
 def load() -> pd.DataFrame:
-    log = pd.read_csv(ROOT / "data" / "processed" / "event_log.csv", dtype={"case_id": str, "bill_no": str})
+    log = pd.read_csv(ROOT / "data" / "processed" / "event_log.csv",
+                      dtype={"case_id": str, "bill_no": str, "alt_bill_no": str})
     log["ts"] = pd.to_datetime(log["date"])
     log["committee_n"] = log["committee"].replace(RENAME)
     # 끝 활동 묶음 이름(구간 계산용)
@@ -192,7 +195,7 @@ def draw_map(log, freq, perf, path, min_freq=600):
     ax.set_xlim(-3.8, 4.4)
     ax.set_ylim(0.3, 11.7)
     ax.axis("off")
-    ax.set_title(f"의원발의 법률안 처리 흐름(22대, 직접 이어진 횟수 {min_freq}건 이상)\n"
+    ax.set_title(f"원안(의원·정부 제출) 법률안 처리 흐름(22대, 직접 이어진 횟수 {min_freq}건 이상)\n"
                  "상자: 활동이 있는 의안 수(주황은 끝 활동) · 화살표: 이어진 횟수와 대기일 중앙값", fontsize=13)
     fig.text(0.01, 0.01, SOURCE + f" · 진행 중 의안 포함 · 재회부·철회 등 {min_freq}건 미만 흐름은 생략",
              fontsize=8, color="#666")
@@ -254,11 +257,87 @@ def draw_batch(batch_tab, path):
     plt.close(fig)
 
 
+def q7_member_vs_gov(log: pd.DataFrame) -> dict:
+    """Q7: 의원안과 정부안의 처리 비율·결과·소위 상정 대기."""
+    out, rows = {}, []
+    for k, g in log.groupby("proposer_kind"):
+        case = g.drop_duplicates("case_id")
+        first, censor = first_and_censor(g)
+        dur, ev = interval(first, censor, "소위 회부", "소위 상정")
+        obs = (first["소위 상정"] - first["소위 회부"]).dt.days
+        done = case[case["case_status"] == "완료"]
+        end = g[g["step_order"] == 11].groupby("case_id")["ts"].min()
+        prop = first["제안"]
+        lead = (end - prop.reindex(end.index)).dt.days
+        row = {"종류": k, "의안": len(case), "처리 비율": round(len(done) / len(case), 3),
+               "가결 비율(처리 중)": round(float(done["final_result"].isin(["원안가결", "수정가결"]).mean()), 3),
+               "대안반영폐기 비율(처리 중)": round(float(done["final_result"].isin(list(ALT)).mean()), 3),
+               "제안 → 끝 중앙값(처리 의안)": float(lead.median()),
+               "소위 회부 의안": len(dur), "소위 상정 도달 비율": round(float(ev.mean()), 3),
+               "소위 회부 → 상정 관찰 중앙값": float(obs[obs >= 0].median()),
+               "소위 회부 → 상정 KM 중앙값": km_median(dur, ev)}
+        rows.append(row)
+        out[k] = row
+    pd.DataFrame(rows).to_csv(OUT / "tables" / "q7_member_vs_gov.csv", index=False, encoding="utf-8-sig")
+    return out
+
+
+def q8_q9_alternatives(full: pd.DataFrame) -> tuple[dict, dict]:
+    """Q8: 대안당 원안 수, Q9: 대안반영폐기 원안의 '소관위 처리 → 대안 본회의'를 대안 단계로 나눔."""
+    links = pd.read_csv(ROOT / "data" / "processed" / "alt_links.csv", dtype=str)
+    alts = full[full["case_group"] == "위원회안"].drop_duplicates("case_id")
+    per_alt = links.groupby("alt_bill_id").size().reindex(alts["case_id"], fill_value=0)
+    orig = full[full["case_group"] == "원안"].drop_duplicates("case_id")
+    absorbed = orig[orig["final_result"].isin(list(ALT))]
+    q8 = {"alts": len(alts), "alts_with_origins": int((per_alt > 0).sum()), "link_rows": len(links),
+          "origins_per_alt_median": float(per_alt[per_alt > 0].median()),
+          "origins_per_alt_p90": float(per_alt[per_alt > 0].quantile(0.9)), "origins_per_alt_max": int(per_alt.max()),
+          "absorbed_origins": len(absorbed),
+          "absorbed_linked_share": round(float(absorbed["case_id"].isin(links["orig_bill_id"]).mean()), 3),
+          "absorbed_linked_by_kind": {k: round(float(g["case_id"].isin(links["orig_bill_id"]).mean()), 3)
+                                      for k, g in absorbed.groupby("proposer_kind")}}
+    dist = per_alt[per_alt > 0].value_counts().sort_index()
+    dist.rename("대안 수").rename_axis("흡수한 원안 수").to_csv(OUT / "tables" / "q8_origins_per_alt.csv", encoding="utf-8-sig")
+
+    first = full.pivot_table(index="case_id", columns="activity", values="ts", aggfunc="min")
+    end = full[full["step_order"] == 11].groupby("case_id")["ts"].min()
+    lk = links[links["orig_bill_id"].isin(absorbed["case_id"])].copy()
+    o, a = lk["orig_bill_id"], lk["alt_bill_id"]
+    seg = pd.DataFrame({
+        "원안 소관위 처리": first["소관위 처리"].reindex(o).values,
+        "대안 소관위 처리": first["소관위 처리"].reindex(a).values,
+        "대안 법사위 회부": first["법사위 회부"].reindex(a).values,
+        "대안 법사위 처리": first["법사위 처리"].reindex(a).values,
+        "대안 위원회 제출": first["위원회 제출"].reindex(a).values,
+        "대안 본회의": end.reindex(a).values,
+        "원안 끝(대안반영폐기)": end.reindex(o).values,
+    })
+    steps = list(seg.columns[:6])
+    rows = []
+    for x, y in zip(steps[:-1], steps[1:]):
+        d = (seg[y] - seg[x]).dt.days.dropna()
+        rows.append({"구간": f"{x} → {y}", "건수": len(d), "중앙값(일)": d.median(), "90분위(일)": d.quantile(0.9),
+                     "같은 날 비율": round(float((d == 0).mean()), 3), "음수": int((d < 0).sum())})
+    total = (seg["대안 본회의"] - seg["원안 소관위 처리"]).dt.days.dropna()
+    rows.append({"구간": "원안 소관위 처리 → 대안 본회의(전체)", "건수": len(total), "중앙값(일)": total.median(),
+                 "90분위(일)": total.quantile(0.9), "같은 날 비율": round(float((total == 0).mean()), 3),
+                 "음수": int((total < 0).sum())})
+    q9t = pd.DataFrame(rows)
+    q9t.to_csv(OUT / "tables" / "q9_alt_path.csv", index=False, encoding="utf-8-sig")
+    same_end = (seg["대안 본회의"] == seg["원안 끝(대안반영폐기)"]).mean()
+    q9 = {"linked_absorbed_pairs": len(seg), "orig_end_equals_alt_plenary": round(float(same_end), 3),
+          "segments": {r["구간"]: {"n": int(r["건수"]), "median": float(r["중앙값(일)"]), "p90": float(r["90분위(일)"]),
+                                  "same_day": r["같은 날 비율"], "negative": r["음수"]} for r in rows}}
+    return q8, q9
+
+
 def main() -> None:
     (OUT / "figures").mkdir(parents=True, exist_ok=True)
     (OUT / "tables").mkdir(parents=True, exist_ok=True)
-    log = load()
-    res = {"query_date": str(QUERY_DATE.date()), "cases": int(log["case_id"].nunique()), "events": len(log)}
+    full = load()
+    log = full[full["case_group"] == "원안"].copy()  # H1～H6은 원안 기준(1015_06 결정 2)
+    res = {"query_date": str(QUERY_DATE.date()), "cases_all": int(full["case_id"].nunique()), "events_all": len(full),
+           "cases": int(log["case_id"].nunique()), "events": len(log)}
 
     # pm4py: 직접 이어짐 빈도·대기, 변형
     f = pm4py.format_dataframe(log[["case_id", "activity", "ts"]].copy(), case_id="case_id",
@@ -368,6 +447,9 @@ def main() -> None:
                  "uniform_share": round(3 / len(mt), 3),
                  "plenary_days": int(ends[ends["activity"] != "철회"]["date"].nunique()),
                  "support": float(top3.sum() / mt["끝 활동"].sum()) >= 0.30}
+
+    res["Q7"] = q7_member_vs_gov(log)
+    res["Q8"], res["Q9"] = q8_q9_alternatives(full)
 
     (OUT / "analysis_results.json").write_text(json.dumps(res, ensure_ascii=False, indent=1, default=float), encoding="utf-8")
     print(json.dumps(res, ensure_ascii=False, indent=1, default=float))
