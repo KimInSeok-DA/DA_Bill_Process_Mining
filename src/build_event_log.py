@@ -1,6 +1,6 @@
 """수집한 원본(data/raw/)으로 이벤트 로그를 만든다. 정의: docs/의사결정/1015_03(v1), 1015_06(v2 범위 확장)
 
-- 케이스: 22대 법률안 1건(BILL_ID). 의원안(기존 API), 정부안·위원장 제안(대안·위원회안, 의안검색 API).
+- 케이스: 법률안 1건(BILL_ID, 기본 22대. --age 21은 1016_09). 의원안(기존 API), 정부안·위원장 제안(대안·위원회안, 의안검색 API).
   case_group: 원안(의원·정부) / 위원회안(위원장 제안). 진행 중 의안도 넣고 case_status로 구분한다
 - 활동(원안): 제안 → 소관위 회부·상정 → 소위 회부·상정·처리 → 소관위 처리 → 법사위 회부·상정·처리 → 끝(처리 결과)
 - 활동(위원회안): 소관위 처리(대안·위원회안 의결) → 법사위 회부·상정·처리 → 위원회 제출(제안일) → 끝
@@ -9,8 +9,8 @@
   (pm4py는 같은 시각이면 행 순서를 따르므로 저장 순서가 곧 활동 순서다)
 - 규칙에 따라 뺀 이벤트는 excluded_events.csv에 사유와 함께 남긴다
 
-출력: data/processed/event_log.csv, excluded_events.csv, alt_links.csv, build_report.json
-실행: .venv/Scripts/python src/build_event_log.py [--date YYYYMMDD]
+출력: data/processed/event_log.csv, excluded_events.csv, alt_links.csv, build_report.json(22대가 아니면 data/processed/age{N}/)
+실행: .venv/Scripts/python src/build_event_log.py [--age N] [--date YYYYMMDD]
 """
 
 import argparse
@@ -46,6 +46,12 @@ END_NAME = {"원안가결": "가결", "수정가결": "가결"}
 KNOWN_ERRORS = {
     ("2207462", "소위 처리", "2026-03-06"): "원 시스템 연도 입력 오류(회의정보상 소위 의결 2025-03-06), 2026-10-15 화면 대조",
 }
+
+
+def processed_dir(age: int) -> Path:
+    """22대는 data/processed/, 다른 대수는 data/processed/age{N}/(22대 결과를 덮어쓰지 않음)."""
+    d = ROOT / "data" / "processed"
+    return d if age == 22 else d / f"age{age}"
 
 
 def load_rows(service: str, folder: str) -> tuple[pd.DataFrame, dict]:
@@ -153,7 +159,9 @@ def main() -> None:
     end["sub_committee"], end["step_order"] = None, END_ORDER
     ev.append(end)
     ev = pd.concat(ev, ignore_index=True)
-    ev["date"] = pd.to_datetime(ev["date"]).dt.strftime("%Y-%m-%d")
+    # 21대 COMMITTEE_DT 3건은 날짜 뒤에 공백이 붙어 있다("2022-07-25 "). 공백만 떼고 날짜는 그대로 쓴다
+    n_date_space = int((ev["date"] != ev["date"].str.strip()).sum())
+    ev["date"] = pd.to_datetime(ev["date"].str.strip()).dt.strftime("%Y-%m-%d")
     ev = ev.merge(case, on="case_id", how="left")
 
     # 경로에 따른 보정(1015_03 4절)
@@ -221,6 +229,7 @@ def main() -> None:
 
     report = {
         "query_date": query_date,
+        "age": args.age,
         "source": {"bills": m_bills["service_name"], "subcommittee": m_sub["service_name"]},
         "cases": int(log["case_id"].nunique()),
         "bills_rows": len(bills),
@@ -233,6 +242,7 @@ def main() -> None:
         "links": link_report(links, bills),
         "case_status": log.drop_duplicates("case_id")["case_status"].value_counts().to_dict(),
         "events": len(log),
+        "date_values_stripped": n_date_space,
         "sub_rows": len(sub_raw),
         "sub_exact_duplicates": n_sub_exact_dup,
         "excluded_by_reason": excluded["exclude_reason"].value_counts().to_dict(),
@@ -243,7 +253,7 @@ def main() -> None:
         "backward_steps": {"cases": inv_cases, "pairs": inv.to_dict()},
     }
 
-    out = ROOT / "data" / "processed"
+    out = processed_dir(args.age)
     out.mkdir(parents=True, exist_ok=True)
     log.to_csv(out / "event_log.csv", index=False, encoding="utf-8-sig")
     links.to_csv(out / "alt_links.csv", index=False, encoding="utf-8-sig")
