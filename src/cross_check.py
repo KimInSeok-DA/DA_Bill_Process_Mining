@@ -2,7 +2,7 @@
 
 - 입력은 이벤트 로그 CSV와 원안-대안 연결 CSV다. analysis.py의 함수는 쓰지 않는다(같은 코드를 다시 돌리는 것은 검증이 아니다)
 - ①～⑤는 원안(의원·정부) 기준, ⑥은 의원·정부별 KM, ⑦은 대안반영폐기 원안의 대안 경로(1015_06 Q7·Q9),
-  ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8), ⑪ 적합성 검사(1016_08)
+  ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8), ⑪ 적합성 검사(1016_08), ⑫ 21대 절단 실험(1016_09)
 - 대조 대상: outputs/tables/*.csv, outputs/analysis_results.json
 - 일치 기준: 건수는 완전 일치, 중앙값·분위수·KM 중앙값은 같은 정의에서 완전 일치(소수점 오차 1e-9)
 - 출력: outputs/cross_check.csv. 하나라도 어긋나면 실패로 끝난다
@@ -313,6 +313,59 @@ if conf_path.exists():
         typ = part.loc[~part[ok_col], "typ"].value_counts()
         for t in sorted(set(typ.index) | {k for k in conf[key]["types"] if "표준" not in k}):
             check("⑪ 적합성 검사", f"{label} 원안 {t}", conf[key]["types"].get(t, 0), int(typ.get(t, 0)))
+
+# ⑫ 21대 절단 실험(1016_09): age21.py(analysis.py 함수) ↔ SQL. T 전 기록만 쓴 표와 끝까지 본 표를 따로 만든다
+age_path = OUT / "age21" / "age21_results.json"
+if age_path.exists():
+    age = json.loads(age_path.read_text(encoding="utf-8"))
+    log21 = (ROOT / "data" / "processed" / "age21" / "event_log.csv").as_posix()
+    cut = age["cut_date"]
+    con.execute(f"""
+    CREATE TABLE e21 AS
+    SELECT case_id, CAST(date AS DATE) AS d, CAST(step_order AS DOUBLE) AS o,
+           CASE WHEN activity IN ('가결', '부결', '폐기') THEN '본회의 처리'
+                WHEN activity IN ('대안반영폐기', '수정안반영폐기') THEN '대안 본회의 통과'
+                WHEN activity = '소관위 재회부' THEN '소관위 회부'
+                WHEN activity = '소관위 상정' AND CAST(step_order AS DOUBLE) > 6 THEN '소관위 상정(소위 뒤)'
+                ELSE activity END AS act2
+    FROM read_csv('{log21}', header = true, all_varchar = true, quote = '"', escape = '"')
+    WHERE case_group = '원안'
+    """)
+    for suffix, where, cens in (("c", f"WHERE d < DATE '{cut}'", f"DATE '{cut}'"), ("f", "", "NULL")):
+        con.execute(f"CREATE TABLE f21{suffix} AS SELECT case_id, act2, min(d) AS d FROM e21 {where} GROUP BY ALL")
+        con.execute(f"""CREATE TABLE c21{suffix} AS SELECT case_id, coalesce(min(d) FILTER (WHERE o = 11), {cens}) AS cd
+                        FROM e21 {where} GROUP BY case_id""")
+
+    def km_sql(base: str) -> str:
+        """base(t, ev)의 KM 중앙값."""
+        return f"""
+        WITH s AS ({base}), g AS (SELECT t, sum(ev) AS dth, count(*) AS cnt FROM s GROUP BY t),
+        r AS (SELECT t, dth, sum(cnt) OVER (ORDER BY t DESC) AS at_risk FROM g),
+        k AS (SELECT t, sum(CASE WHEN dth = at_risk THEN -1e9 ELSE ln(1 - dth / at_risk) END) OVER (ORDER BY t) AS ls FROM r)
+        SELECT min(t) FILTER (WHERE exp(ls) <= 0.5) AS med FROM k"""
+
+    tab = {r["구간"]: r for r in age["table"]}
+    for name, r in tab.items():
+        a_, b_ = name.split(" → ")
+        con.execute(f"""
+        CREATE OR REPLACE TABLE b21 AS
+        SELECT a.case_id, a.d AS da, bc.d AS dbc, cc.cd AS cdc, bf.d AS dbf, cf.cd AS cdf
+        FROM f21c a
+        LEFT JOIN f21c bc ON bc.case_id = a.case_id AND bc.act2 = '{b_}'
+        LEFT JOIN f21f bf ON bf.case_id = a.case_id AND bf.act2 = '{b_}'
+        JOIN c21c cc ON cc.case_id = a.case_id JOIN c21f cf ON cf.case_id = a.case_id
+        WHERE a.act2 = '{a_}' AND (bc.d IS NULL OR bc.d >= a.d) AND (bf.d IS NULL OR bf.d >= a.d)
+        """)
+        n = q("SELECT count(*) AS n, count(dbc) AS reach, median(dbc - da) AS obs, avg((dbf IS NOT NULL)::INT) AS share FROM b21").iloc[0]
+        km_c = q(km_sql("SELECT greatest(coalesce(dbc, cdc) - da, 0) AS t, (dbc IS NOT NULL)::INT AS ev FROM b21"))["med"][0]
+        km_f = q(km_sql("SELECT greatest(coalesce(dbf, cdf) - da, 0) AS t, (dbf IS NOT NULL)::INT AS ev FROM b21"))["med"][0]
+        check("⑫ 21대 절단 실험", f"{name} 대상 의안", r["대상 의안"], n["n"])
+        check("⑫ 21대 절단 실험", f"{name} T 전 도달", r["T 전 도달"], n["reach"])
+        check("⑫ 21대 절단 실험", f"{name} ① 끝난 의안 기준", r["① 끝난 의안 기준"], n["obs"])
+        check("⑫ 21대 절단 실험", f"{name} ② T 시점 KM", r["② T 시점 KM"], km_c)
+        check("⑫ 21대 절단 실험", f"{name} ③ 정답(끝까지 KM)", r["③ 정답(끝까지 KM)"], km_f)
+        check("⑫ 21대 절단 실험", f"{name} 임기 끝까지 도달 비율", r["임기 끝까지 도달 비율"], round(float(n["share"]), 3))
+    check("⑫ 21대 절단 실험", "21대 원안 수", age["cases_21"], int(q("SELECT count(DISTINCT case_id) AS n FROM e21")["n"][0]))
 
 # 기본 건수
 n = q("SELECT count(*) AS ev, count(DISTINCT case_id) AS cs FROM e").iloc[0]

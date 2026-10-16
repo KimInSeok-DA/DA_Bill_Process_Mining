@@ -56,8 +56,8 @@ plt.rcParams["font.family"] = "Malgun Gothic"
 plt.rcParams["axes.unicode_minus"] = False
 
 
-def load() -> pd.DataFrame:
-    log = pd.read_csv(ROOT / "data" / "processed" / "event_log.csv",
+def load(path: Path = ROOT / "data" / "processed" / "event_log.csv") -> pd.DataFrame:
+    log = pd.read_csv(path,
                       dtype={"case_id": str, "bill_no": str, "alt_bill_no": str})
     log["ts"] = pd.to_datetime(log["date"])
     log["committee_n"] = log["committee"].replace(RENAME)
@@ -121,11 +121,11 @@ def km_median(dur: pd.Series, event: pd.Series) -> float | None:
     return float(below.index[0]) if len(below) else None
 
 
-def first_and_censor(log: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+def first_and_censor(log: pd.DataFrame, query_date: pd.Timestamp = QUERY_DATE) -> tuple[pd.DataFrame, pd.Series]:
     """의안별 활동 첫 날짜 표와 중도절단 시점(진행 중이면 조회일, 끝났으면 끝 활동 날짜)."""
     first = log.pivot_table(index="case_id", columns="act2", values="ts", aggfunc="min")
     end = log[log["step_order"] == 11].groupby("case_id")["ts"].min()
-    censor = pd.Series(QUERY_DATE, index=first.index)
+    censor = pd.Series(query_date, index=first.index)
     censor.loc[end.index] = end
     return first, censor
 
