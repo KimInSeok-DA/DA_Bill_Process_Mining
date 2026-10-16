@@ -2,7 +2,7 @@
 
 - 입력은 이벤트 로그 CSV와 원안-대안 연결 CSV다. analysis.py의 함수는 쓰지 않는다(같은 코드를 다시 돌리는 것은 검증이 아니다)
 - ①～⑤는 원안(의원·정부) 기준, ⑥은 의원·정부별 KM, ⑦은 대안반영폐기 원안의 대안 경로(1015_06 Q7·Q9),
-  ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8), ⑪ 적합성 검사(1016_08), ⑫ 21대 절단 실험(1016_09)
+  ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8), ⑪ 적합성 검사(1016_08), ⑫ 21대 절단 실험(1016_09), ⑬ 지연 법률안 특징(1016_11)
 - 대조 대상: outputs/tables/*.csv, outputs/analysis_results.json
 - 일치 기준: 건수는 완전 일치, 중앙값·분위수·KM 중앙값은 같은 정의에서 완전 일치(소수점 오차 1e-9)
 - 출력: outputs/cross_check.csv. 하나라도 어긋나면 실패로 끝난다
@@ -314,6 +314,16 @@ if conf_path.exists():
         for t in sorted(set(typ.index) | {k for k in conf[key]["types"] if "표준" not in k}):
             check("⑪ 적합성 검사", f"{label} 원안 {t}", conf[key]["types"].get(t, 0), int(typ.get(t, 0)))
 
+def km_sql(base: str, cut: int | None = None) -> str:
+    """base(t, ev)의 KM 중앙값(med). cut을 주면 cut일까지 다음 단계에 간 비율(reach)도."""
+    reach = f", 1 - coalesce(exp(arg_max(ls, t) FILTER (WHERE t <= {cut})), 1) AS reach" if cut is not None else ""
+    return f"""
+    WITH s AS ({base}), g AS (SELECT t, sum(ev) AS dth, count(*) AS cnt FROM s GROUP BY t),
+    r AS (SELECT t, dth, sum(cnt) OVER (ORDER BY t DESC) AS at_risk FROM g),
+    k AS (SELECT t, sum(CASE WHEN dth = at_risk THEN -1e9 ELSE ln(1 - dth / at_risk) END) OVER (ORDER BY t) AS ls FROM r)
+    SELECT min(t) FILTER (WHERE exp(ls) <= 0.5) AS med{reach} FROM k"""
+
+
 # ⑫ 21대 절단 실험(1016_09): age21.py(analysis.py 함수) ↔ SQL. T 전 기록만 쓴 표와 끝까지 본 표를 따로 만든다
 age_path = OUT / "age21" / "age21_results.json"
 if age_path.exists():
@@ -335,14 +345,6 @@ if age_path.exists():
         con.execute(f"CREATE TABLE f21{suffix} AS SELECT case_id, act2, min(d) AS d FROM e21 {where} GROUP BY ALL")
         con.execute(f"""CREATE TABLE c21{suffix} AS SELECT case_id, coalesce(min(d) FILTER (WHERE o = 11), {cens}) AS cd
                         FROM e21 {where} GROUP BY case_id""")
-
-    def km_sql(base: str) -> str:
-        """base(t, ev)의 KM 중앙값."""
-        return f"""
-        WITH s AS ({base}), g AS (SELECT t, sum(ev) AS dth, count(*) AS cnt FROM s GROUP BY t),
-        r AS (SELECT t, dth, sum(cnt) OVER (ORDER BY t DESC) AS at_risk FROM g),
-        k AS (SELECT t, sum(CASE WHEN dth = at_risk THEN -1e9 ELSE ln(1 - dth / at_risk) END) OVER (ORDER BY t) AS ls FROM r)
-        SELECT min(t) FILTER (WHERE exp(ls) <= 0.5) AS med FROM k"""
 
     tab = {r["구간"]: r for r in age["table"]}
     for name, r in tab.items():
@@ -366,6 +368,72 @@ if age_path.exists():
         check("⑫ 21대 절단 실험", f"{name} ③ 정답(끝까지 KM)", r["③ 정답(끝까지 KM)"], km_f)
         check("⑫ 21대 절단 실험", f"{name} 임기 끝까지 도달 비율", r["임기 끝까지 도달 비율"], round(float(n["share"]), 3))
     check("⑫ 21대 절단 실험", "21대 원안 수", age["cases_21"], int(q("SELECT count(DISTINCT case_id) AS n FROM e21")["n"][0]))
+
+# ⑬ 지연 법률안 특징(1016_11): delay_factors.py ↔ SQL. 법 이름·종류 규칙을 SQL 정규식으로 따로 작성
+delay_path = OUT / "delay_results.json"
+if delay_path.exists():
+    dres = json.loads(delay_path.read_text(encoding="utf-8"))
+    names = []
+    for pg in sorted((ROOT / "data" / "raw" / "TVBPMBILL11" / f"AGE22_{QUERY_DATE.replace('-', '')}").glob("p*.json")):
+        names += [(r["BILL_ID"], r["BILL_NAME"]) for r in json.loads(pg.read_text(encoding="utf-8"))["TVBPMBILL11"][1]["row"]]
+    nm = pd.DataFrame(names, columns=["case_id", "bill_name"])
+    con.register("nm_df", nm)
+    con.execute("""
+    CREATE TABLE nm AS
+    SELECT case_id, bill_name,
+           CASE WHEN regexp_matches(trim(bill_name), '(일부개정|전부개정|폐지)법률안$')
+                THEN regexp_replace(trim(bill_name), '\s*(일부개정|전부개정|폐지)법률안$', '')
+                ELSE regexp_replace(trim(bill_name), '안$', '') END AS law,
+           CASE WHEN bill_name LIKE '%일부개정%' THEN '일부개정'
+                WHEN bill_name LIKE '%전부개정%' OR bill_name LIKE '%폐지%' THEN '전부개정·폐지'
+                ELSE '제정' END AS kind
+    FROM nm_df WHERE case_id IN (SELECT DISTINCT case_id FROM e)
+    """)
+    con.execute("""
+    CREATE TABLE dl AS
+    WITH base AS (
+      SELECT a.case_id, greatest(coalesce(b.d, c.cd) - a.d, 0) AS t, (b.d IS NOT NULL)::INT AS ev
+      FROM f a LEFT JOIN f b ON b.case_id = a.case_id AND b.act2 = '소위 상정'
+      JOIN cens c ON c.case_id = a.case_id
+      WHERE a.act2 = '소위 회부' AND (b.d IS NULL OR b.d >= a.d)
+    ), lawn AS (SELECT law, count(*) AS n FROM nm GROUP BY law),
+    sc AS (SELECT DISTINCT case_id, first_value(cmt) OVER (PARTITION BY case_id ORDER BY d, rn) AS cmt FROM e WHERE activity = '소위 회부')
+    SELECT base.*, nm.kind, any_value(e.proposer_kind) AS pk, sc.cmt,
+           CASE WHEN lawn.n = 1 THEN '1건(혼자)' WHEN lawn.n <= 4 THEN '2～4' WHEN lawn.n <= 9 THEN '5～9'
+                WHEN lawn.n <= 49 THEN '10～49' ELSE '50건 이상' END AS f1
+    FROM base JOIN nm USING (case_id) JOIN lawn USING (law) JOIN e USING (case_id) LEFT JOIN sc USING (case_id)
+    GROUP BY ALL
+    """)
+    gt = pd.read_csv(OUT / "tables" / "delay_groups.csv").set_index(["특징", "집단"])
+    for feat, col in (("F1 같은 법 법률안 수", "f1"), ("F2 법률안 종류", "kind"), ("F3 제안자", "pk")):
+        for grp in gt.loc[feat].index:
+            r = q(km_sql(f"SELECT t, ev FROM dl WHERE {col} = '{grp}'", 365)).iloc[0]
+            n = q(f"SELECT count(*) AS n FROM dl WHERE {col} = '{grp}'")["n"][0]
+            check("⑬ 지연 법률안 특징", f"{grp} 법률안 수", gt.loc[(feat, grp), "법률안"], n)
+            check("⑬ 지연 법률안 특징", f"{grp} KM 중앙값", gt.loc[(feat, grp), "KM 중앙값"], r["med"])
+            check("⑬ 지연 법률안 특징", f"{grp} 1년 안 상정 비율", gt.loc[(feat, grp), "1년 안 상정 비율(보조)"],
+                  round(float(r["reach"]), 4), tol=1e-4)
+    check("⑬ 지연 법률안 특징", "D1 10건 이상 KM 중앙값", dres["D1"]["ten_plus_km"],
+          q(km_sql("SELECT t, ev FROM dl WHERE f1 IN ('10～49', '50건 이상')"))["med"][0])
+    # 위원회 안 비교: 두 집단 각 30건 이상인 위원회 수와 같은 방향(엄격한 부등호, 중앙값 없음 = ∞)인 위원회 수
+    inf_ = 10**9
+    for key, col, slow, fast in (("D1", "f1", "('1건(혼자)')", "('10～49', '50건 이상')"), ("D2", "kind", "('제정')", "('일부개정')"),
+                                 ("D3", "pk", "('의원')", "('정부')")):
+        cm = q(f"""SELECT cmt FROM dl WHERE cmt NOT LIKE '%특별위원회%' GROUP BY cmt
+                   HAVING count(*) FILTER (WHERE {col} IN {slow}) >= 30 AND count(*) FILTER (WHERE {col} IN {fast}) >= 30""")["cmt"]
+        same = 0
+        for c in cm:
+            ms = q(km_sql(f"SELECT t, ev FROM dl WHERE cmt = '{c}' AND {col} IN {slow}"))["med"][0]
+            mf = q(km_sql(f"SELECT t, ev FROM dl WHERE cmt = '{c}' AND {col} IN {fast}"))["med"][0]
+            same += (inf_ if pd.isna(ms) else ms) > (inf_ if pd.isna(mf) else mf)
+        check("⑬ 지연 법률안 특징", f"{key} 비교 위원회 수", dres[key]["within"]["committees"], len(cm))
+        check("⑬ 지연 법률안 특징", f"{key} 같은 방향 위원회 수", dres[key]["within"]["same_direction"], same)
+    share = q("""
+    WITH p AS (SELECT e.case_id, e.d, e.cmt, nm.law FROM e JOIN nm USING (case_id) WHERE e.activity = '소위 상정'),
+    c AS (SELECT *, count(*) OVER (PARTITION BY cmt, d, law) AS n FROM p)
+    SELECT avg((n >= 2)::INT) AS s, count(*) AS cnt FROM c""").iloc[0]
+    check("⑬ 지연 법률안 특징", "소위 상정 이벤트 수", dres["sub_present_events"], share["cnt"])
+    check("⑬ 지연 법률안 특징", "같은 날 같은 법과 함께 상정된 비율", dres["same_law_same_day_share"], round(float(share["s"]), 3))
 
 # 기본 건수
 n = q("SELECT count(*) AS ev, count(DISTINCT case_id) AS cs FROM e").iloc[0]

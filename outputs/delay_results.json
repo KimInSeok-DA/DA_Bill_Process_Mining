@@ -1,0 +1,48 @@
+{
+ "query_date": "2026-10-15",
+ "cases": 17629,
+ "reached": 7771,
+ "laws": 2554,
+ "D1": {
+  "alone_km": null,
+  "ten_plus_km": 490.0,
+  "n_alone": 1078,
+  "n_ten_plus": 13433,
+  "overall": true,
+  "within": {
+   "committees": 13,
+   "same_direction": 6,
+   "majority": false,
+   "both_undefined": 5,
+   "same_direction_1y_post_hoc": 10
+  },
+  "support": false
+ },
+ "D2": {
+  "enact_km": 378.0,
+  "partial_km": 567.0,
+  "n_enact": 1124,
+  "n_partial": 16403,
+  "overall": false,
+  "within": {
+   "committees": 12,
+   "same_direction": 4,
+   "majority": false,
+   "both_undefined": 3,
+   "same_direction_1y_post_hoc": 7
+  },
+  "support": false
+ },
+ "D3": {
+  "within": {
+   "committees": 7,
+   "same_direction": 4,
+   "majority": true,
+   "both_undefined": 1,
+   "same_direction_1y_post_hoc": 5
+  },
+  "support": true
+ },
+ "same_law_same_day_share": 0.813,
+ "sub_present_events": 8137
+}
