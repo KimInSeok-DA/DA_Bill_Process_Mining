@@ -1,0 +1,55 @@
+{
+ "model": {
+  "states": 12,
+  "transitions": 27
+ },
+ "completed": {
+  "cases": 5474,
+  "variants": 63,
+  "fully_fit": 3979,
+  "fully_fit_share": 0.7269,
+  "mean_fitness": 0.9408,
+  "walk_agrees_with_alignment": true,
+  "deviating": 1495,
+  "deviating_legal": 1351,
+  "deviating_legal_share": 0.9037,
+  "types": {
+   "표준 절차": 3979,
+   "소위 직접 회부": 1181,
+   "그 밖": 101,
+   "재회부": 87,
+   "법사위 소관": 60,
+   "소위 생략": 43,
+   "예산부수 자동부의": 21,
+   "신속처리": 2
+  }
+ },
+ "in_progress": {
+  "cases": 14945,
+  "compliant_so_far": 13583,
+  "compliant_share": 0.9089,
+  "types": {
+   "지금까지 표준 절차": 13583,
+   "소위 직접 회부": 1099,
+   "재회부": 214,
+   "그 밖": 45,
+   "신속처리": 3,
+   "소위 생략": 1
+  },
+  "top_deviation_points": {
+   "소관위 회부 → 소위 회부": 1099,
+   "제안 → 소위 회부": 214,
+   "소관위 회부 → 소위 상정": 20,
+   "소위 상정 → 소관위 처리": 17,
+   "소관위 상정 → 소위 상정": 7
+  }
+ },
+ "C1": {
+  "criterion": "완전 적합 90% 이상",
+  "support": false
+ },
+ "C2": {
+  "criterion": "이탈 중 법정 예외(유형 1～5) 80% 이상",
+  "support": true
+ }
+}
