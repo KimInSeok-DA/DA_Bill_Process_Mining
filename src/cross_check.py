@@ -2,7 +2,7 @@
 
 - 입력은 이벤트 로그 CSV와 원안-대안 연결 CSV다. analysis.py의 함수는 쓰지 않는다(같은 코드를 다시 돌리는 것은 검증이 아니다)
 - ①～⑤는 원안(의원·정부) 기준, ⑥은 의원·정부별 KM, ⑦은 대안반영폐기 원안의 대안 경로(1015_06 Q7·Q9),
-  ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8)
+  ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8), ⑪ 적합성 검사(1016_08)
 - 대조 대상: outputs/tables/*.csv, outputs/analysis_results.json
 - 일치 기준: 건수는 완전 일치, 중앙값·분위수·KM 중앙값은 같은 정의에서 완전 일치(소수점 오차 1e-9)
 - 출력: outputs/cross_check.csv. 하나라도 어긋나면 실패로 끝난다
@@ -264,6 +264,55 @@ check("⑩ 대안당 원안 수(Q8)", "연결 행", res["Q8"]["link_rows"], q8["
 check("⑩ 대안당 원안 수(Q8)", "중앙값", res["Q8"]["origins_per_alt_median"], q8["med"])
 check("⑩ 대안당 원안 수(Q8)", "90분위", res["Q8"]["origins_per_alt_p90"], q8["p90"])
 check("⑩ 대안당 원안 수(Q8)", "최대", res["Q8"]["origins_per_alt_max"], q8["mx"])
+
+# ⑪ 적합성 검사(1016_08): pm4py 정렬·상태 추적 ↔ 정규식(SQL)과 SQL 규칙
+conf_path = OUT / "conformance_results.json"
+if conf_path.exists():
+    conf = json.loads(conf_path.read_text(encoding="utf-8"))
+    # 표준 절차를 정규식으로 다시 씀(conformance.py의 상태표와 따로 작성)
+    W = "(>철회)"
+    law = f"법사위 회부(>법사위 상정(>법사위 처리(>(가결|부결|폐기)|{W})|{W})|{W})"
+    after_cmt = f"소관위 처리(>{law}|>(대안반영폐기|수정안반영폐기|폐기)|{W})"
+    sub = f"소위 회부(>소위 상정(>소위 상정)*(>소위 처리(>{after_cmt}|{W})|{W})|{W})"
+    full = f"^제안(>소관위 회부(>소관위 상정(>{sub}|{W})|{W})|{W})$"
+    law_p = "법사위 회부(>법사위 상정(>법사위 처리)?)?"
+    prefix = (f"^제안(>소관위 회부(>소관위 상정(>소위 회부(>소위 상정(>소위 상정)*(>소위 처리(>소관위 처리(>{law_p})?)?)?)?)?)?)?$")
+    con.execute("""
+    CREATE TABLE tr AS
+    SELECT case_id, any_value(case_status) AS st, any_value(case_committee) AS cc,
+           string_agg(activity, '>' ORDER BY rn) AS path,
+           min(rn) FILTER (WHERE activity = '소위 회부') AS r_sref, min(rn) FILTER (WHERE activity = '소관위 상정') AS r_cpre,
+           min(rn) FILTER (WHERE activity = '법사위 회부') AS r_lref, min(rn) FILTER (WHERE activity = '소관위 처리') AS r_cproc,
+           bool_or(activity = '소관위 재회부') AS rere,
+           count(*) FILTER (WHERE activity = '소위 회부') AS n_sref,
+           count(DISTINCT committee) FILTER (WHERE activity = '소위 회부') AS n_scmt,
+           bool_or(activity = '소관위 상정' AND o > 6) AS pre_after,
+           bool_or(activity = '가결') AS passed, bool_or(activity IN ('가결', '부결')) AS voted,
+           bool_or(activity IN ('소위 회부', '소위 상정', '소위 처리')) AS has_sub
+    FROM (SELECT eall.*, ev.case_committee FROM eall JOIN ev USING (rn)) WHERE case_group = '원안'
+    GROUP BY case_id
+    """)
+    tr = q(f"""
+    SELECT *, CASE
+      WHEN rere OR (n_sref >= 2 AND n_scmt >= 2) THEN '재회부'
+      WHEN (r_sref IS NOT NULL AND (r_cpre IS NULL OR r_sref < r_cpre)) OR pre_after THEN '소위 직접 회부'
+      WHEN r_lref IS NOT NULL AND (r_cproc IS NULL OR r_lref < r_cproc) THEN '신속처리'
+      WHEN passed AND r_cproc IS NULL THEN '예산부수 자동부의'
+      WHEN voted AND r_lref IS NULL AND cc = '법제사법위원회' THEN '법사위 소관'
+      WHEN r_cproc IS NOT NULL AND NOT has_sub THEN '소위 생략'
+      ELSE '그 밖' END AS typ,
+      regexp_full_match(path, '{full}') AS fit, regexp_full_match(path, '{prefix}') AS pfit
+    FROM tr
+    """)
+    done, prog = tr[tr["st"] == "완료"], tr[tr["st"] == "진행중"]
+    check("⑪ 적합성 검사", "끝난 원안 수", conf["completed"]["cases"], len(done))
+    check("⑪ 적합성 검사", "끝난 원안 완전 적합", conf["completed"]["fully_fit"], int(done["fit"].sum()))
+    check("⑪ 적합성 검사", "처리 중 원안 수", conf["in_progress"]["cases"], len(prog))
+    check("⑪ 적합성 검사", "처리 중 지금까지 표준 절차", conf["in_progress"]["compliant_so_far"], int(prog["pfit"].sum()))
+    for label, part, key, ok_col in (("끝난", done, "completed", "fit"), ("처리 중", prog, "in_progress", "pfit")):
+        typ = part.loc[~part[ok_col], "typ"].value_counts()
+        for t in sorted(set(typ.index) | {k for k in conf[key]["types"] if "표준" not in k}):
+            check("⑪ 적합성 검사", f"{label} 원안 {t}", conf[key]["types"].get(t, 0), int(typ.get(t, 0)))
 
 # 기본 건수
 n = q("SELECT count(*) AS ev, count(DISTINCT case_id) AS cs FROM e").iloc[0]

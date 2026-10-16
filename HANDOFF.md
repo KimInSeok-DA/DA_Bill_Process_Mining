@@ -3,7 +3,7 @@
 ## 현재 상태 (2026-10-15)
 
 - 설정: `AGENTS.md`·`CLAUDE.md`·`.gitignore`·`.gitattributes`·`.env.example`·`.claude/settings.json`(attribution 끔)·`.githooks/`(`core.hooksPath` 설정됨)·`.python-version`(3.14), `git init`
-- GitHub(10-15): `main`에 README·설정(PR #1), 수집·날짜 필드 정의(PR #2), 소위 수집(PR #3), 이벤트 로그(PR #4), 분석(PR #5), 교차 검증(PR #6), 범위 확장(PR #7) 병합. 현재 브랜치 `report`(커밋 전). 계속 바뀌는 문서·`requirements.txt`는 단계가 끝날 때 그 브랜치로 올림. 커밋·푸시는 사용자 요청 시에만, PR 제목·본문은 알려 주면 사용자가 붙여 넣음
+- GitHub(10-15): `main`에 README·설정(PR #1), 수집·날짜 필드 정의(PR #2), 소위 수집(PR #3), 이벤트 로그(PR #4), 분석(PR #5), 교차 검증(PR #6), 범위 확장(PR #7), 보고서(PR #8) 병합. **저장소 공개 완료(10-15)**. 적합성 검사는 `conformance` 브랜치로 푸시(10-16, PR 병합 대기). 계속 바뀌는 문서·`requirements.txt`는 단계가 끝날 때 그 브랜치로 올림. 커밋·푸시는 사용자 요청 시에만, PR 제목·본문은 알려 주면 사용자가 붙여 넣음
 - `.env`에 `ASSEMBLY_API_KEY` 있음. 10-15 동작 확인: 「국회의원 발의법률안」(`nzmimeepazxkubdpn`) AGE=22 19,917건, 단계 날짜 필드 있음(`_private/02_로드맵.md` 1절)
 - 환경(10-15): `.venv` Python 3.14.5, `requirements.txt`는 `pip freeze` 고정(pm4py 2.7.23.10·pandas 3.0.6·duckdb 1.5.6). 3.12 대신 3.14: PC에 3.14만 설치돼 있고 pm4py·의존 패키지가 3.14 Windows 휠을 제공(설치·import 확인)
 - 수집 완료(10-15): `src/collect.py` → `data/raw/nzmimeepazxkubdpn/AGE22_20261015/`(20페이지 + `manifest.json`). 행 19,917 = 고유 `BILL_ID` 19,917 = `list_total_count` 19,917. 제안일 2024-05-30～2026-10-14
@@ -32,12 +32,14 @@
 
 - 보고서(10-15, [1015_07](docs/의사결정/1015_07_보고서와_공개범위.md)): `outputs/report.md`(1쪽, 그림 1·4·10), `README.md` 전면 수정, `docs/용어.md`. 이벤트 로그 CSV는 비공개(README에 다시 만드는 방법)
 
+- 적합성 검사(10-16, [1016_08](docs/의사결정/1016_08_적합성검사.md)): `src/conformance.py`. C1 맞지 않음(완전 적합 72.7%), C2 맞음(이탈 중 법정 예외 90.4%). 교차 검증 326/326
+- 21대 원본 수집 완료(10-15): `data/raw/*/AGE21_20261015/`(의원안 23,655, 소위 23,840행, 의안검색 25,858)
+
 ## 다음 작업
 
-1. **`report` 커밋 시점**(사용자 요청 대기)
-2. GitHub에서 README·보고서가 잘 보이는지 확인(그림, 표, `<details>` 접기) → 저장소 공개(사용자)
-3. 지원서 반영: 포트폴리오 MINI 1장, 지원(10-29～31, 마감 11-01)
-4. 남은 선택 과제: 열린국회정보 재배포 조건 확인 뒤 CSV 공개 검토, 위원회 회의정보 추가(위원회 처리 뒤 재심사)
+1. `conformance` PR 병합 → main pull, 로컬 브랜치 삭제
+2. `age21` 브랜치: 1016_09 결정 문서(868일 절단 실험 정의·가설, 결과 전 기록) → 21대 화면 대조 2～3건(임기만료폐기 날짜) → 스크립트에 `--age`·결과 폴더 분리(`data/processed/age21/`, `outputs/age21/`) → 이벤트 로그·실험·교차 검증
+3. README·보고서에 21대 결과 추가, 지원서 반영(포트폴리오 MINI, 10-29～31)
 
 ## 열린 결정
 
