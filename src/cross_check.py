@@ -3,7 +3,7 @@
 - 입력은 이벤트 로그 CSV와 원안-대안 연결 CSV다. analysis.py의 함수는 쓰지 않는다(같은 코드를 다시 돌리는 것은 검증이 아니다)
 - ①～⑤는 원안(의원·정부) 기준, ⑥은 의원·정부별 KM, ⑦은 대안반영폐기 원안의 대안 경로(1015_06 Q7·Q9),
   ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8), ⑪ 적합성 검사(1016_08), ⑫ 21대 절단 실험(1016_09), ⑬ 지연 법률안 특징(1016_11),
-  ⑭ 소위 반복 심사(1016_10, 회의정보 원본 JSON을 SQL로 직접 읽음)
+  ⑭ 소위 반복 심사(1016_10, 회의정보 원본 JSON을 SQL로 직접 읽음), ⑮ OCEL(1016_12)
 - 대조 대상: outputs/tables/*.csv, outputs/analysis_results.json
 - 일치 기준: 건수는 완전 일치, 중앙값·분위수·KM 중앙값은 같은 정의에서 완전 일치(소수점 오차 1e-9)
 - 출력: outputs/cross_check.csv. 하나라도 어긋나면 실패로 끝난다
@@ -501,6 +501,101 @@ if meet_path.exists() and delay_path.exists():
     check("⑭ 소위 반복 심사", "1회 상정 중 그날 의결", mres["aux"]["one_present_voted_same_day"], round(float(ov), 4), tol=1e-4)
     op = q("""SELECT avg(only_p::INT) AS s FROM (SELECT case_id, d, bool_and(rs = '상정') AS only_p FROM crq GROUP BY case_id, d)""")["s"][0]
     check("⑭ 소위 반복 심사", "상정만 있는 소위 회의 비율", mres["aux"]["sub_meeting_days_only_present"], round(float(op), 4), tol=1e-4)
+
+# ⑮ OCEL(1016_12): ocel.py ↔ SQL. 사건 합치기 규칙·O1·O2를 SQL로 따로 작성(I1은 모델 품질 지표라 SQL 대조 없음)
+ocel_path = OUT / "ocel_results.json"
+if ocel_path.exists() and delay_path.exists():
+    ores = json.loads(ocel_path.read_text(encoding="utf-8"))
+    con.register("nm_all_df", nm)
+    con.execute("""
+    CREATE TABLE nm2 AS
+    WITH s AS (SELECT case_id, regexp_replace(trim(bill_name), '\\s*\\((대안|위원회안)\\)\\s*$', '') AS b FROM nm_all_df)
+    SELECT case_id, CASE WHEN regexp_matches(b, '(일부개정|전부개정|폐지)법률안$')
+                         THEN regexp_replace(b, '\\s*(일부개정|전부개정|폐지)법률안$', '')
+                         ELSE regexp_replace(b, '안$', '') END AS law
+    FROM s
+    """)
+    con.execute("""
+    CREATE TABLE oe AS
+    WITH k AS (
+      SELECT *, CASE WHEN activity IN ('소관위 상정', '소관위 처리') THEN '소관위'
+                     WHEN activity IN ('소위 상정', '소위 처리') THEN '소위'
+                     WHEN activity IN ('법사위 상정', '법사위 처리') THEN '법사위'
+                     WHEN activity IN ('가결', '부결') THEN '본회의' END AS stage
+      FROM eall),
+    m AS (
+      SELECT *, CASE WHEN stage IS NULL THEN NULL
+                     WHEN stage = '법사위' THEN stage || '|법제사법위원회|' || CAST(d AS VARCHAR)
+                     WHEN stage = '본회의' THEN stage || '|본회의|' || CAST(d AS VARCHAR)
+                     WHEN cmt IS NULL THEN NULL
+                     ELSE stage || '|' || cmt || '|' || CAST(d AS VARCHAR) END AS mk
+      FROM k),
+    alt_plen AS (
+      SELECT case_id AS alt_id, arg_min(activity || '|' || mk, rn) AS peid, arg_min(d, rn) AS pd
+      FROM m WHERE case_group = '위원회안' AND activity IN ('가결', '부결') GROUP BY case_id)
+    SELECT m.case_id, m.activity, m.d, m.case_group,
+           CASE WHEN m.activity IN ('대안반영폐기', '수정안반영폐기') AND m.case_group = '원안' AND ap.pd = m.d THEN ap.peid
+                WHEN m.mk IS NOT NULL THEN m.activity || '|' || m.mk
+                ELSE 'e' || CAST(m.rn AS VARCHAR) END AS eid,
+           (m.activity IN ('대안반영폐기', '수정안반영폐기') AND m.case_group = '원안') AS is_abs,
+           (m.activity IN ('대안반영폐기', '수정안반영폐기') AND m.case_group = '원안' AND ap.pd = m.d) AS abs_merged,
+           CASE WHEN m.activity IN ('대안반영폐기', '수정안반영폐기') AND m.case_group = '원안' AND ap.pd = m.d
+                THEN split_part(ap.peid, '|', 2) || '|' || split_part(ap.peid, '|', 3) || '|' || split_part(ap.peid, '|', 4)
+                ELSE m.mk END AS mk
+    FROM m LEFT JOIN lk ON lk.orig_bill_id = m.case_id
+           LEFT JOIN alt_plen ap ON ap.alt_id = lk.alt_bill_id
+    """)
+    t = q("""SELECT count(*) AS rows_, count(DISTINCT eid) AS ev, sum(is_abs::INT) AS ab, sum(abs_merged::INT) AS abm,
+                    count(DISTINCT mk) AS meetings FROM oe""").iloc[0]
+    check("⑮ OCEL", "케이스 중심 사건 수", ores["case_events"], t["rows_"])
+    check("⑮ OCEL", "OCEL 사건 수", ores["ocel_events"], t["ev"])
+    check("⑮ OCEL", "대안반영폐기·수정안반영폐기 행", ores["absorb"]["rows"], t["ab"])
+    check("⑮ OCEL", "대안 본회의 사건에 합쳐진 행", ores["absorb"]["merged_same_day"], t["abm"])
+    check("⑮ OCEL", "회의 객체 수", ores["objects"]["회의"], t["meetings"])
+    check("⑮ OCEL", "법 객체 수", ores["objects"]["법"],
+          q("SELECT count(DISTINCT law) AS n FROM nm2 WHERE case_id IN (SELECT DISTINCT case_id FROM eall)")["n"][0])
+    infl = q("""
+    WITH p AS (SELECT activity, eid, count(DISTINCT case_id) AS n FROM oe
+               WHERE mk IS NOT NULL AND activity IN ('소관위 상정', '소관위 처리', '소위 상정', '소위 처리',
+                                                    '법사위 상정', '법사위 처리', '가결', '부결') GROUP BY ALL)
+    SELECT activity, count(*) AS ev, sum(n) AS cs, quantile_cont(n, 0.5) AS med FROM p GROUP BY activity""").set_index("activity")
+    for a, r in ores["inflation"].items():
+        check("⑮ OCEL", f"{a} OCEL 사건 수", r["ocel"], infl.loc[a, "ev"])
+        check("⑮ OCEL", f"{a} 케이스 중심 사건 수", r["case"], infl.loc[a, "cs"])
+        check("⑮ OCEL", f"{a} 사건당 법률안 중앙값", r["median_bills"], infl.loc[a, "med"])
+    # O1: (위원회, 날짜, 법)마다 기다리던 같은 법 원안이 모두 그날 상정됐나
+    o1 = q("""
+    WITH r AS (SELECT case_id, cmt, min(d) AS rd FROM e WHERE activity = '소위 회부' AND cmt IS NOT NULL GROUP BY ALL),
+    fp AS (SELECT case_id, min(d) AS fp FROM e WHERE activity = '소위 상정' GROUP BY case_id),
+    en AS (SELECT case_id, min(d) AS ed FROM e
+           WHERE activity IN ('가결', '부결', '폐기', '철회', '대안반영폐기', '수정안반영폐기') GROUP BY case_id),
+    rr AS (SELECT r.*, n.law, fp.fp, en.ed FROM r JOIN nm2 n USING (case_id) LEFT JOIN fp USING (case_id) LEFT JOIN en USING (case_id)),
+    pr AS (SELECT DISTINCT e.case_id, e.cmt, e.d, n.law FROM e JOIN nm2 n USING (case_id)
+           WHERE e.activity = '소위 상정' AND e.cmt IS NOT NULL AND n.law IS NOT NULL),
+    pairs AS (SELECT DISTINCT cmt, d, law FROM pr WHERE (cmt, law) IN (SELECT cmt, law FROM rr)),
+    w AS (SELECT p.cmt, p.d, p.law, rr.case_id FROM pairs p JOIN rr ON rr.cmt = p.cmt AND rr.law = p.law
+          WHERE rr.rd <= p.d AND (rr.fp IS NULL OR rr.fp >= p.d) AND (rr.ed IS NULL OR rr.ed >= p.d)),
+    agg AS (SELECT p.cmt, p.d, p.law, count(w.case_id) AS nw,
+                   count(w.case_id) FILTER (WHERE w.case_id NOT IN (SELECT case_id FROM pr x
+                                            WHERE x.cmt = p.cmt AND x.d = p.d AND x.law = p.law)) AS miss
+            FROM pairs p LEFT JOIN w ON w.cmt = p.cmt AND w.d = p.d AND w.law = p.law GROUP BY ALL)
+    SELECT count(*) AS pairs, count(*) FILTER (WHERE nw <= 1) AS alone,
+           count(*) FILTER (WHERE nw > 1 AND miss = 0) AS together, count(*) FILTER (WHERE nw > 1) AS used FROM agg""").iloc[0]
+    check("⑮ OCEL", "O1 (위원회, 날짜, 법) 수", ores["O1"]["pairs"], o1["pairs"])
+    check("⑮ OCEL", "O1 혼자 기다림(분모 제외)", ores["O1"]["alone_excluded"], o1["alone"])
+    check("⑮ OCEL", "O1 모두 함께 상정", ores["O1"]["all_together"], o1["together"])
+    check("⑮ OCEL", "O1 비율", ores["O1"]["share"], round(float(o1["together"] / o1["used"]), 4), tol=1e-4)
+    o2 = q("""
+    WITH r AS (SELECT case_id, min(d) AS rd FROM e WHERE activity = '소관위 회부' GROUP BY case_id),
+    x AS (SELECT lk.alt_bill_id, r.rd FROM lk LEFT JOIN r ON r.case_id = lk.orig_bill_id),
+    g AS (SELECT alt_bill_id, max(rd) - min(rd) AS span FROM x WHERE rd IS NOT NULL GROUP BY alt_bill_id HAVING count(*) >= 2)
+    SELECT (SELECT count(*) FROM x WHERE rd IS NULL) AS no_ref, count(*) AS n, quantile_cont(span, 0.5) AS med,
+           quantile_cont(span, 0.25) AS q1, quantile_cont(span, 0.75) AS q3 FROM g""").iloc[0]
+    check("⑮ OCEL", "O2 회부일 없는 원안", ores["O2"]["orig_without_ref"], o2["no_ref"])
+    check("⑮ OCEL", "O2 대상 대안 수", ores["O2"]["alts_used"], o2["n"])
+    check("⑮ OCEL", "O2 회부일 범위 중앙값", ores["O2"]["median_span"], o2["med"])
+    check("⑮ OCEL", "O2 1사분위", ores["O2"]["quartiles"][0], o2["q1"])
+    check("⑮ OCEL", "O2 3사분위", ores["O2"]["quartiles"][1], o2["q3"])
 
 # 기본 건수
 n = q("SELECT count(*) AS ev, count(DISTINCT case_id) AS cs FROM e").iloc[0]

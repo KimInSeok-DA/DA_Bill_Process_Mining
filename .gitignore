@@ -30,3 +30,4 @@ data/processed/*/*.csv
 
 # API 명세서 원본(열린국회정보에서 내려받음, 저장소에 올리지 않음)
 docs/api_spec/
+data/processed/ocel/

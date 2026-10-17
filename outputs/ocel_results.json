@@ -1,0 +1,129 @@
+{
+ "case_events": 107808,
+ "ocel_events": 63064,
+ "merged_away": 44744,
+ "objects": {
+  "원안": 20419,
+  "법": 2564,
+  "회의": 985,
+  "대안": 907
+ },
+ "relations": 189715,
+ "o2o": 25795,
+ "absorb": {
+  "rows": 4458,
+  "no_alt_link": 39,
+  "alt_no_plenary": 0,
+  "merged_same_day": 4419,
+  "merged_share": 0.9913
+ },
+ "inflation": {
+  "소관위 상정": {
+   "ocel": 372,
+   "case": 17011,
+   "ratio": 45.73,
+   "median_bills": 16.0
+  },
+  "소관위 처리": {
+   "ocel": 244,
+   "case": 6366,
+   "ratio": 26.09,
+   "median_bills": 16.0
+  },
+  "소위 상정": {
+   "ocel": 389,
+   "case": 8137,
+   "ratio": 20.92,
+   "median_bills": 14.0
+  },
+  "소위 처리": {
+   "ocel": 368,
+   "case": 5446,
+   "ratio": 14.8,
+   "median_bills": 10.0
+  },
+  "법사위 상정": {
+   "ocel": 49,
+   "case": 1595,
+   "ratio": 32.55,
+   "median_bills": 25.0
+  },
+  "법사위 처리": {
+   "ocel": 50,
+   "case": 1588,
+   "ratio": 31.76,
+   "median_bills": 23.0
+  },
+  "가결": {
+   "ocel": 80,
+   "case": 1734,
+   "ratio": 21.68,
+   "median_bills": 4.0
+  },
+  "부결": {
+   "ocel": 3,
+   "case": 3,
+   "ratio": 1.0,
+   "median_bills": 1.0
+  }
+ },
+ "O1": {
+  "pairs": 2785,
+  "alone_excluded": 882,
+  "pairs_used": 1903,
+  "all_together": 336,
+  "share": 0.1766,
+  "support": false
+ },
+ "O2": {
+  "alts_with_links": 895,
+  "orig_without_ref": 83,
+  "alts_used": 888,
+  "median_span": 118.0,
+  "quartiles": [
+   48.0,
+   291.25
+  ],
+  "support": false
+ },
+ "I1": {
+  "cases": 5474,
+  "국회법 모델": {
+   "fitness": 0.9408,
+   "perfect_share": 0.7269,
+   "precision": 0.8311,
+   "token_fitness": 0.9662,
+   "transitions": 27,
+   "places": 12,
+   "sec": 1.4
+  },
+  "Inductive Miner 0.2": {
+   "fitness": 0.9776,
+   "perfect_share": 0.9065,
+   "precision": 0.6614,
+   "token_fitness": 0.9778,
+   "transitions": 19,
+   "places": 15,
+   "sec": 1.0
+  },
+  "Inductive Miner 0.0": {
+   "fitness": 1.0,
+   "perfect_share": 1.0,
+   "precision": 0.3643,
+   "token_fitness": 1.0,
+   "transitions": 42,
+   "places": 27,
+   "sec": 9.1
+  },
+  "Inductive Miner 0.4": {
+   "fitness": 0.9776,
+   "perfect_share": 0.9065,
+   "precision": 0.6614,
+   "token_fitness": 0.9778,
+   "transitions": 19,
+   "places": 15,
+   "sec": 0.9
+  },
+  "support": true
+ }
+}
