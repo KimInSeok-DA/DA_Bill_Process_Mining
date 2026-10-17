@@ -3,7 +3,7 @@
 - 입력은 이벤트 로그 CSV와 원안-대안 연결 CSV다. analysis.py의 함수는 쓰지 않는다(같은 코드를 다시 돌리는 것은 검증이 아니다)
 - ①～⑤는 원안(의원·정부) 기준, ⑥은 의원·정부별 KM, ⑦은 대안반영폐기 원안의 대안 경로(1015_06 Q7·Q9),
   ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8), ⑪ 적합성 검사(1016_08), ⑫ 21대 절단 실험(1016_09), ⑬ 지연 법률안 특징(1016_11),
-  ⑭ 소위 반복 심사(1016_10, 회의정보 원본 JSON을 SQL로 직접 읽음), ⑮ OCEL(1016_12)
+  ⑭ 소위 반복 심사(1016_10, 회의정보 원본 JSON을 SQL로 직접 읽음), ⑮ OCEL(1016_12), ⑯ 회부 지연 확인(1017_13)
 - 대조 대상: outputs/tables/*.csv, outputs/analysis_results.json
 - 일치 기준: 건수는 완전 일치, 중앙값·분위수·KM 중앙값은 같은 정의에서 완전 일치(소수점 오차 1e-9)
 - 출력: outputs/cross_check.csv. 하나라도 어긋나면 실패로 끝난다
@@ -596,6 +596,48 @@ if ocel_path.exists() and delay_path.exists():
     check("⑮ OCEL", "O2 회부일 범위 중앙값", ores["O2"]["median_span"], o2["med"])
     check("⑮ OCEL", "O2 1사분위", ores["O2"]["quartiles"][0], o2["q1"])
     check("⑮ OCEL", "O2 3사분위", ores["O2"]["quartiles"][1], o2["q3"])
+
+# ⑯ 회부 지연 확인(1017_13): referral_check.py ↔ SQL
+ref_path = OUT / "referral_results.json"
+if ref_path.exists():
+    rres = json.loads(ref_path.read_text(encoding="utf-8"))
+    rc = q("""
+    WITH p AS (SELECT case_id, min(d) AS pd FROM e WHERE activity = '제안' GROUP BY case_id),
+    r AS (SELECT case_id, min(d) AS rd FROM e WHERE activity = '소관위 회부' GROUP BY case_id),
+    c AS (SELECT DISTINCT case_id, first_value(cmt) OVER (PARTITION BY case_id ORDER BY rn) AS cmt FROM e),
+    fr AS (SELECT cmt, min(d) AS f, min(d) FILTER (WHERE d >= DATE '2026-05-30') AS h FROM e
+           WHERE activity IN ('소관위 회부', '소관위 재회부') GROUP BY cmt),
+    x AS (SELECT r.case_id, r.rd, p.pd, r.rd - p.pd AS days, c.cmt, fr.f, fr.h
+          FROM r JOIN p USING (case_id) JOIN c USING (case_id) LEFT JOIN fr USING (cmt) WHERE r.rd - p.pd > 30),
+    y AS (SELECT *, count(*) OVER (PARTITION BY cmt, rd) AS nb FROM x)
+    SELECT CASE WHEN rd = h AND pd < h THEN '1 후반기 원구성'
+                WHEN cmt LIKE '%특별위원회%' AND pd < f THEN '2 특별위원회 생기기 전 제안'
+                WHEN nb >= 5 THEN '3 같은 날 한 위원회로 일괄 회부' ELSE '4 그 밖' END AS cat, count(*) AS n
+    FROM y GROUP BY cat""").set_index("cat")["n"]
+    check("⑯ 회부 지연 확인", "30일 초과 원안", rres["over_30"], int(rc.sum()))
+    for k, v in rres["categories"].items():
+        check("⑯ 회부 지연 확인", k, v, rc.get(k, 0))
+
+# ⑯ 화면 확인(1017_13 6절): referral_screen.py(정규식) ↔ lxml XPath로 원본 조각을 따로 읽음
+scr_path = OUT / "referral_screen.json"
+if scr_path.exists():
+    from lxml import html as lh
+    sres = json.loads(scr_path.read_text(encoding="utf-8"))
+    prop = q("SELECT bill_no, min(CAST(date AS DATE)) AS pd FROM ev WHERE activity = '제안' GROUP BY bill_no").set_index("bill_no")["pd"]
+    multi = early = ret = 0
+    files = sorted((ROOT / "data" / "raw" / "likms_billInfo").glob("*/*.html"))
+    for f in files:
+        tb = lh.fromstring(f.read_text(encoding="utf-8")).xpath("//h4[text()='소관위 심사정보']/following-sibling::table[1]/tbody/tr")
+        refs = [t.xpath("string(td[contains(@class,'submitDt')]/span)").strip() for t in tb]
+        res_ = [t.xpath("string(td[contains(@class,'inscResultCd')]/span)").strip() for t in tb]
+        if len(refs) > 1:
+            multi += 1
+            early += (pd.Timestamp(min(refs)) - pd.Timestamp(prop[f.stem])).days > 30
+        ret += "회송" in res_
+    check("⑯ 화면 확인", "받은 화면 수", sres["bills"], len(files))
+    check("⑯ 화면 확인", "앞선 회부 있음", sres["screen"].get("앞선 회부 있음", 0), multi)
+    check("⑯ 화면 확인", "앞선 회부 중 처음 회부도 30일 초과", sres["first_days_over_30"], early)
+    check("⑯ 화면 확인", "회송 기록 있음", sres["returned_any"], ret)
 
 # 기본 건수
 n = q("SELECT count(*) AS ev, count(DISTINCT case_id) AS cs FROM e").iloc[0]
