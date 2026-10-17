@@ -1,0 +1,48 @@
+{
+ "conf_date": "20261016",
+ "query_date": "2026-10-15",
+ "bills_requested": 7847,
+ "no_data": 14,
+ "bills_with_data": 7833,
+ "rows": 84196,
+ "rows_after_query_date": 0,
+ "no_sub_present": 114,
+ "bills_sub_present": 7719,
+ "C": {
+  "match": 7598,
+  "share": 0.97,
+  "pass": true
+ },
+ "R1": {
+  "repeat": 3790,
+  "share": 0.491,
+  "support": true
+ },
+ "R2": {
+  "n": 3790,
+  "median_gap": 7.0,
+  "support": false
+ },
+ "R3": {
+  "n_alone": 429,
+  "alone_share": 0.5431,
+  "n_50plus": 3061,
+  "50plus_share": 0.655,
+  "support": true
+ },
+ "aux": {
+  "distribution": {
+   "1회": 3929,
+   "2회": 1679,
+   "3회": 849,
+   "4회 이상": 1262
+  },
+  "gap_quartiles": [
+   4.0,
+   64.0
+  ],
+  "one_present_voted_same_day": 0.7366,
+  "sub_meeting_days_only_present": 0.4351,
+  "max_presentations": 13
+ }
+}

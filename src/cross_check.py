@@ -2,7 +2,8 @@
 
 - 입력은 이벤트 로그 CSV와 원안-대안 연결 CSV다. analysis.py의 함수는 쓰지 않는다(같은 코드를 다시 돌리는 것은 검증이 아니다)
 - ①～⑤는 원안(의원·정부) 기준, ⑥은 의원·정부별 KM, ⑦은 대안반영폐기 원안의 대안 경로(1015_06 Q7·Q9),
-  ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8), ⑪ 적합성 검사(1016_08), ⑫ 21대 절단 실험(1016_09), ⑬ 지연 법률안 특징(1016_11)
+  ⑧ 위원회별 KM(H5), ⑨ 월별 건수(H6), ⑩ 대안당 원안 수(Q8), ⑪ 적합성 검사(1016_08), ⑫ 21대 절단 실험(1016_09), ⑬ 지연 법률안 특징(1016_11),
+  ⑭ 소위 반복 심사(1016_10, 회의정보 원본 JSON을 SQL로 직접 읽음)
 - 대조 대상: outputs/tables/*.csv, outputs/analysis_results.json
 - 일치 기준: 건수는 완전 일치, 중앙값·분위수·KM 중앙값은 같은 정의에서 완전 일치(소수점 오차 1e-9)
 - 출력: outputs/cross_check.csv. 하나라도 어긋나면 실패로 끝난다
@@ -434,6 +435,72 @@ if delay_path.exists():
     SELECT avg((n >= 2)::INT) AS s, count(*) AS cnt FROM c""").iloc[0]
     check("⑬ 지연 법률안 특징", "소위 상정 이벤트 수", dres["sub_present_events"], share["cnt"])
     check("⑬ 지연 법률안 특징", "같은 날 같은 법과 함께 상정된 비율", dres["same_law_same_day_share"], round(float(share["s"]), 3))
+
+# ⑭ 소위 반복 심사(1016_10): meetings.py ↔ SQL. 회의정보 원본 JSON을 DuckDB가 직접 읽는다(pandas 미사용)
+meet_path = OUT / "meetings_results.json"
+if meet_path.exists() and delay_path.exists():
+    mres = json.loads(meet_path.read_text(encoding="utf-8"))
+    conf_dir = (ROOT / "data" / "raw" / "BILLJUDGECONF" / f"AGE22_{mres['conf_date']}").as_posix()
+    con.execute(f"""
+    CREATE TABLE cf AS
+    SELECT parse_filename(filename, true) AS case_id, content
+    FROM read_text('{conf_dir}/*.json') WHERE NOT filename LIKE '%manifest.json'
+    """)
+    con.execute("""
+    CREATE TABLE cr AS
+    SELECT case_id, r.JRCMIT_CONF_NM AS nm, CAST(r.JRCMIT_CONF_DT AS DATE) AS d, r.JRCMIT_CONF_RSLT AS rs
+    FROM (SELECT case_id, unnest(from_json(json_extract(content, '$.BILLJUDGECONF[1].row'),
+          '[{"JRCMIT_CONF_NM": "VARCHAR", "JRCMIT_CONF_DT": "VARCHAR", "JRCMIT_CONF_RSLT": "VARCHAR"}]')) AS r
+          FROM cf WHERE json_extract(content, '$.BILLJUDGECONF') IS NOT NULL)
+    """)
+    con.execute(f"CREATE TABLE crq AS SELECT * FROM cr WHERE d <= DATE '{QUERY_DATE}' AND nm LIKE '%소위회의%'")
+    con.execute("""
+    CREATE TABLE mp AS
+    WITH p AS (SELECT DISTINCT case_id, d FROM crq WHERE rs = '상정'),
+    k AS (SELECT case_id, d, row_number() OVER (PARTITION BY case_id ORDER BY d) AS k FROM p),
+    lawn AS (SELECT law, count(*) AS n FROM nm GROUP BY law)
+    SELECT case_id, count(*) AS n, min(d) AS first, max(d) FILTER (WHERE k = 2) - min(d) AS gap,
+           any_value(CASE WHEN lawn.n = 1 THEN '1건(혼자)' WHEN lawn.n >= 50 THEN '50건 이상' ELSE '그 밖' END) AS f1
+    FROM k JOIN nm USING (case_id) JOIN lawn USING (law) GROUP BY case_id
+    """)
+    b = q("SELECT count(*) AS req, count(*) FILTER (WHERE json_extract(content, '$.BILLJUDGECONF') IS NULL) AS nd FROM cf").iloc[0]
+    cnt = q(f"SELECT count(*) AS r, count(*) FILTER (WHERE d > DATE '{QUERY_DATE}') AS late FROM cr").iloc[0]
+    m = q("""SELECT count(*) AS n, sum((n >= 2)::INT) AS rep, avg((n >= 2)::INT) AS share,
+                    quantile_cont(gap, 0.5) AS med, quantile_cont(gap, 0.25) AS q1, quantile_cont(gap, 0.75) AS q3,
+                    avg((n >= 2)::INT) FILTER (WHERE f1 = '1건(혼자)') AS alone, count(*) FILTER (WHERE f1 = '1건(혼자)') AS n_alone,
+                    avg((n >= 2)::INT) FILTER (WHERE f1 = '50건 이상') AS big, count(*) FILTER (WHERE f1 = '50건 이상') AS n_big,
+                    max(n) AS mx FROM mp""").iloc[0]
+    have = int(b["req"] - b["nd"])
+    check("⑭ 소위 반복 심사", "받은 법률안 수", mres["bills_requested"], b["req"])
+    check("⑭ 소위 반복 심사", "자료 없음", mres["no_data"], b["nd"])
+    check("⑭ 소위 반복 심사", "회의 기록 행 수", mres["rows"], cnt["r"])
+    check("⑭ 소위 반복 심사", "조회일 뒤 행 수", mres["rows_after_query_date"], cnt["late"])
+    check("⑭ 소위 반복 심사", "소위 상정 있는 법률안", mres["bills_sub_present"], m["n"])
+    check("⑭ 소위 반복 심사", "소위 상정 없음", mres["no_sub_present"], have - m["n"])
+    check("⑭ 소위 반복 심사", "R1 반복 심사 법률안", mres["R1"]["repeat"], m["rep"])
+    check("⑭ 소위 반복 심사", "R1 반복 심사 비율", mres["R1"]["share"], round(float(m["share"]), 4), tol=1e-4)
+    check("⑭ 소위 반복 심사", "R2 재상정 간격 중앙값", mres["R2"]["median_gap"], m["med"])
+    check("⑭ 소위 반복 심사", "재상정 간격 1사분위", mres["aux"]["gap_quartiles"][0], m["q1"])
+    check("⑭ 소위 반복 심사", "재상정 간격 3사분위", mres["aux"]["gap_quartiles"][1], m["q3"])
+    check("⑭ 소위 반복 심사", "R3 혼자 법률안 수", mres["R3"]["n_alone"], m["n_alone"])
+    check("⑭ 소위 반복 심사", "R3 혼자 반복 비율", mres["R3"]["alone_share"], round(float(m["alone"]), 4), tol=1e-4)
+    check("⑭ 소위 반복 심사", "R3 50건 이상 법률안 수", mres["R3"]["n_50plus"], m["n_big"])
+    check("⑭ 소위 반복 심사", "R3 50건 이상 반복 비율", mres["R3"]["50plus_share"], round(float(m["big"]), 4), tol=1e-4)
+    check("⑭ 소위 반복 심사", "최대 상정 횟수", mres["aux"]["max_presentations"], m["mx"])
+    dist = q("SELECT least(n, 4) AS k, count(*) AS c FROM mp GROUP BY k ORDER BY k")
+    for (label, v), c in zip(mres["aux"]["distribution"].items(), dist["c"]):
+        check("⑭ 소위 반복 심사", f"상정 횟수 {label}", v, c)
+    cm = q("""SELECT count(*) FILTER (WHERE mp.first = ef.d) AS c FROM cf
+              LEFT JOIN mp USING (case_id)
+              LEFT JOIN (SELECT case_id, min(d) AS d FROM e WHERE activity = '소위 상정' GROUP BY case_id) ef USING (case_id)
+              WHERE json_extract(content, '$.BILLJUDGECONF') IS NOT NULL""")["c"][0]
+    check("⑭ 소위 반복 심사", "C 첫 소위 상정 날짜 일치", mres["C"]["match"], cm)
+    ov = q("""SELECT count(DISTINCT mp.case_id) FILTER (WHERE v.case_id IS NOT NULL) * 1.0 / count(DISTINCT mp.case_id) AS s
+              FROM mp LEFT JOIN (SELECT DISTINCT case_id, d FROM crq WHERE rs = '의결') v
+              ON v.case_id = mp.case_id AND v.d = mp.first WHERE mp.n = 1""")["s"][0]
+    check("⑭ 소위 반복 심사", "1회 상정 중 그날 의결", mres["aux"]["one_present_voted_same_day"], round(float(ov), 4), tol=1e-4)
+    op = q("""SELECT avg(only_p::INT) AS s FROM (SELECT case_id, d, bool_and(rs = '상정') AS only_p FROM crq GROUP BY case_id, d)""")["s"][0]
+    check("⑭ 소위 반복 심사", "상정만 있는 소위 회의 비율", mres["aux"]["sub_meeting_days_only_present"], round(float(op), 4), tol=1e-4)
 
 # 기본 건수
 n = q("SELECT count(*) AS ev, count(DISTINCT case_id) AS cs FROM e").iloc[0]

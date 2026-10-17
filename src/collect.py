@@ -4,12 +4,14 @@
 - subcommittee: 「소위 심사정보(법률안)」(TVBPMCONFINFO) — 소위 회부·상정·처리일
 - allbills: 「법률안 심사 및 처리(의안검색)」(TVBPMBILL11) — 의원·정부·위원장 제안 법률안 전체, 단계별 날짜
 - altref: 같은 서비스에 BILL_ID_REF=대안 ID로 물어 대안이 흡수한 원안 목록을 받는다(대안 1건당 1번 호출)
+- conf: 「의안 위원회심사 회의정보 조회」(BILLJUDGECONF) — 소위 상정 기록이 있는 원안의 위원회 회의별 기록(의안 1건당 1번 호출)
 
 - 인증키는 .env의 ASSEMBLY_API_KEY로만 읽고, 출력에는 남기지 않는다.
 - 이미 저장된 페이지는 다시 부르지 않는다(같은 조회일 폴더 기준).
 - 끝나면 저장된 행 수를 list_total_count와 대조한다(bills는 고유 BILL_ID 수도).
 
-실행: .venv/Scripts/python src/collect.py [--service bills|subcommittee|allbills|altref] [--age 22] [--date YYYYMMDD]
+실행: .venv/Scripts/python src/collect.py [--service bills|subcommittee|allbills|altref|conf] [--age 22] [--date YYYYMMDD]
+      conf는 대상 의안 목록을 --src-date 폴더(소위·의안검색 원본)에서 고른다
 """
 
 import argparse
@@ -63,9 +65,10 @@ def fetch_page(service: str, key: str, age: int, page: int, extra: dict | None =
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--service", choices=[*SERVICES, "altref"], default="bills")
+    ap.add_argument("--service", choices=[*SERVICES, "altref", "conf"], default="bills")
     ap.add_argument("--age", type=int, default=22)
     ap.add_argument("--date", default=date.today().strftime("%Y%m%d"), help="조회일 폴더(이어받기용)")
+    ap.add_argument("--src-date", help="conf: 대상 의안을 고를 원본 폴더의 조회일(기본: --date)")
     args = ap.parse_args()
 
     load_dotenv(ROOT / ".env")
@@ -75,6 +78,9 @@ def main() -> None:
 
     if args.service == "altref":
         collect_altref(key, args.age, args.date)
+        return
+    if args.service == "conf":
+        collect_conf(key, args.age, args.date, args.src_date or args.date)
         return
     SERVICE, service_name, unique_bill = SERVICES[args.service]
     out_dir = ROOT / "data" / "raw" / SERVICE / f"AGE{args.age}_{args.date}"
@@ -164,6 +170,54 @@ def collect_altref(key: str, age: int, date_: str) -> None:
          "query_date": f"{date_[:4]}-{date_[4:6]}-{date_[6:]}", "alts": len(alts), "links": links},
         ensure_ascii=False, indent=1), encoding="utf-8")
     if files != len(alts) or full:
+        sys.exit("대조 불일치")
+
+
+
+def load_pages(service: str, folder: Path) -> list[dict]:
+    rows = []
+    for path in sorted(folder.glob("p*.json")):
+        rows.extend(json.loads(path.read_text(encoding="utf-8"))[service][1]["row"])
+    return rows
+
+
+def collect_conf(key: str, age: int, date_: str, src_date: str) -> None:
+    """소위 상정 기록이 있는 원안(의원·정부)마다 위원회 회의별 기록을 받는다(1016_10)."""
+    raw = ROOT / "data" / "raw"
+    kind = {r["BILL_ID"]: r["PROPOSER_KIND"] for r in load_pages("TVBPMBILL11", raw / "TVBPMBILL11" / f"AGE{age}_{src_date}")}
+    sub = load_pages("TVBPMCONFINFO", raw / "TVBPMCONFINFO" / f"AGE{age}_{src_date}")
+    targets = sorted({r["BILL_ID"] for r in sub if r["PRESENT_DT"] and kind.get(r["BILL_ID"]) in ("의원", "정부")})
+    service = "BILLJUDGECONF"
+    out_dir = raw / service / f"AGE{age}_{date_}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"소위 상정 기록이 있는 원안 {len(targets):,}건의 회의 기록 조회 ({out_dir.relative_to(ROOT)})")
+    for i, bill_id in enumerate(targets, 1):
+        path = out_dir / f"{bill_id}.json"
+        if path.exists():
+            continue
+        data = fetch_page(service, key, age, 1, {"BILL_ID": bill_id})
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        if i % 500 == 0:
+            print(f"  {i}/{len(targets)}")
+        time.sleep(SLEEP_SEC)
+    # 대조: 파일 수 = 대상 수, 한 페이지(1,000건)를 넘는 응답이 없는지, 응답의 의안번호가 요청과 같은지
+    rows, full, empty, mismatch = 0, 0, 0, 0
+    for bill_id in targets:
+        d = json.loads((out_dir / f"{bill_id}.json").read_text(encoding="utf-8"))
+        if service not in d:
+            empty += 1
+            continue
+        got = d[service][1]["row"]
+        rows += len(got)
+        full += d[service][0]["head"][0]["list_total_count"] > PAGE_SIZE
+        mismatch += any(r["BILL_ID"] != bill_id for r in got) if got and "BILL_ID" in got[0] else 0
+    files = len([f for f in out_dir.glob("*.json") if f.name != "manifest.json"])
+    print(f"저장 파일 {files:,} / 대상 {len(targets):,} / 회의 기록 행 {rows:,} / 기록 없음 {empty} / 1,000건 초과 {full} / 의안 불일치 {mismatch}")
+    (out_dir / "manifest.json").write_text(json.dumps(
+        {"service": service, "service_name": "의안 위원회심사 회의정보 조회", "age": age,
+         "query_date": f"{date_[:4]}-{date_[4:6]}-{date_[6:]}", "target_source_date": src_date,
+         "targets": len(targets), "rows": rows, "no_record": empty}, ensure_ascii=False, indent=1), encoding="utf-8")
+    if files != len(targets) or full or mismatch:
         sys.exit("대조 불일치")
 
 
